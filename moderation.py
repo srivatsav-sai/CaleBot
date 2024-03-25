@@ -2,6 +2,7 @@ import nextcord as discord
 import time
 import asyncio
 import re
+import os
 
 intents = discord.Intents.default()
 intents.members = True
@@ -105,4 +106,4 @@ async def on_voice_state_update(member, before, after):
     elif before.channel is not None and after.channel is None:
         await log_event("Voice Channel Left", member, f"{member.mention} left voice channel: {before.channel.name}")
 
-CLIENT.run('MTIyMTczNzIzMDI4NTE0NDA5NQ.GXVsMK.DKcf411v8ewYSxLQzRv5sSoaOWWpdPTJjnlS1I')
+CLIENT.run(os.environ['TOKEN'])
