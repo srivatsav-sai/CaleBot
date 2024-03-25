@@ -2,6 +2,7 @@
 
 import nextcord as discord
 from datetime import datetime,timedelta
+import os
 
 COMMAND_PREFIX = "c."
 from nextcord.ext import commands
@@ -48,4 +49,4 @@ async def memberMute(interaction: discord.Interaction, timeout:int , user: disco
     await user.timeout(timeout=delta , reason=reason)
     await interaction.send(f"test mute{user}", ephemeral=True)
 
-bot.run('MTIyMTczNzIzMDI4NTE0NDA5NQ.GXVsMK.DKcf411v8ewYSxLQzRv5sSoaOWWpdPTJjnlS1I')
+bot.run(os.environ['TOKEN'])
