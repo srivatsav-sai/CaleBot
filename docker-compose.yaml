@@ -3,7 +3,7 @@ services:
   calebot:
     build: .
     environment:
-      - TOKEN=""
+      - TOKEN="MTIyMTczNzIzMDI4NTE0NDA5NQ.GeCHy0.T0OLONvsN4H_LfXzMg_PIX3zpEuVFAPdw2WkCg"
 
   mongodb:
     image: mongo:latest
