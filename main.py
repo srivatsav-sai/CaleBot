@@ -11,14 +11,14 @@ import re
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds = True
-intents.messages = True
+intents.presences = False
 intents.message_content = True
 intents.voice_states = True
-intents.typing = True
-intents.presences = False
-intents.reactions = True
-intents.moderation = True
 intents.emojis = True
+intents.moderation = True
+intents.reactions = True
+intents.typing = True
+intents.messages = True
 
 
 TESTING_GUILD_ID = 748394748099821648
@@ -29,14 +29,12 @@ LINK_REGEX = r"(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\
 MESSAGE_COOLDOWN = 60
 USER_COOLDOWN = 60
 MAX_MESSAGES_PER_BURST = 5
-AUDIT_LOG_CHANNEL = 1221887151650902176
+AUDIT_LOG_CHANNEL = 1222575735332409495
 ALLOWED_LINK_DOMAINS = ["youtube.com"]
 ALLOWED_LINK_CHANNELS = []
 
 message_cooldowns = {}
 user_cooldowns = {}
-
-LOG_CHANNEL_ID = 1221887151650902176
 
 def strip_url(url):
     url = re.sub(r'^(?:https?|ftp)://', '', url)
@@ -50,7 +48,7 @@ async def log_message(message):
             await audit_channel.send(message)
 
 async def log_event(event_type, user, content):
-    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    log_channel = bot.get_channel(AUDIT_LOG_CHANNEL)
     if log_channel:
         embed = discord.Embed(title=event_type, description=content)
         embed.set_author(name=user.name, icon_url=user.avatar.url)
@@ -75,7 +73,6 @@ async def on_voice_state_update(member, before, after):
 @bot.event
 async def on_member_update(before, after):
     if before.roles != after.roles:
-        # Get role changes (added/removed)
         added_roles = [role for role in after.roles if role not in before.roles]
         removed_roles = [role for role in before.roles if role not in after.roles]
         log_message = f"Member Role Update: {after.name} (ID: {after.id})\n"
@@ -105,7 +102,6 @@ async def on_ready():
 async def on_message(message):
     if message.author == bot.user:
         return
-
     print(message.author, message.channel.name, message.content, message.embeds)
 
     matches = re.findall(LINK_REGEX, message.content, re.IGNORECASE)
@@ -186,4 +182,4 @@ async def changeNick(interaction: discord.Interaction , user: discord.Member=dis
     await interaction.send(f"test nickname{user}", ephemeral=True)
 
 # bot.run(os.environ['TOKEN'])
-bot.run('TOKEN')
+bot.run('MTIyMTczNzIzMDI4NTE0NDA5NQ.G_0aPF.ROvNAxlCtfmt8KVhatymPP_Gf-sfj6_DlZ1hBE')
