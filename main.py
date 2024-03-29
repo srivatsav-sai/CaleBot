@@ -20,8 +20,7 @@ intents.reactions = True
 intents.typing = True
 intents.messages = True
 
-
-TESTING_GUILD_ID = 748394748099821648
+TESTING_GUILD_ID = 1222575663869984778
 bot = discord.Client(intents=intents)
 # bot = commands.Bot()
 
