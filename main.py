@@ -25,9 +25,9 @@ bot = discord.Client(intents=intents)
 # bot = commands.Bot()
 
 LINK_REGEX = r"(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})"
-MESSAGE_COOLDOWN = 60
+MESSAGE_COOLDOWN = 10
 USER_COOLDOWN = 60
-MAX_MESSAGES_PER_BURST = 5
+MAX_MESSAGES_PER_BURST = 3
 AUDIT_LOG_CHANNEL = 1222575735332409495
 ALLOWED_LINK_DOMAINS = ["youtube.com"]
 ALLOWED_LINK_CHANNELS = []
