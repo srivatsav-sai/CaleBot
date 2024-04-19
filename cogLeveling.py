@@ -5,7 +5,7 @@ from settings import CONFIG
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds = True
-intents.presences = False
+intents.presences = True
 intents.message_content = True
 intents.voice_states = True
 intents.emojis = True
@@ -21,25 +21,26 @@ cluster = MongoClient("mongodb://localhost:27017/")
 db = cluster["bottesting1"]
 collection = db["discordserver"]
 
-# class HandleLevel(commands.Cog):
-#     def __init__(self,client):
-#         self.client = client
 
-# logging.basicConfig(level=logging.DEBUG)
+class HandleLevel(commands.Cog):
+    def __init__(self, client):
+        self.client = client
 
-if __name__ == "__main__":
+    # logging.basicConfig(level=logging.DEBUG)
+
+    # if __name__ == "__main__":
 
     @bot.event
-    async def on_ready():
+    async def on_ready(self):
         print(f"We have logged in as {bot.user}")
 
     @bot.event
-    async def check_level_up(channel, message, collection):
+    async def check_level_up(self, channel, message, collection):
         query = {"_id": message.author.id}
         user = collection.find_one(query)
 
         if not user:
-            post = {"_id": message.author.id, "score": 0, "currency": 0, "level":0}
+            post = {"_id": message.author.id, "score": 0, "currency": 0, "level": 0}
             collection.insert_one(post)
             return
 
@@ -58,7 +59,7 @@ if __name__ == "__main__":
             )
 
     @bot.event
-    async def on_message(message):
+    async def on_message(self, message):
 
         if message.author == bot.user:
             return
@@ -67,7 +68,12 @@ if __name__ == "__main__":
         myquery = {"_id": message.author.id}
         if collection.count_documents(myquery) == 0:
             if "" in str(message.content.lower()):
-                post = {"_id": message.author.id, "score": 1, "currency":1, "level":1}
+                post = {
+                    "_id": message.author.id,
+                    "score": 1,
+                    "currency": 1,
+                    "level": 1,
+                }
                 collection.insert_one(post)
         else:
             if "" in str(message.content.lower()):
@@ -77,18 +83,23 @@ if __name__ == "__main__":
                     score = result["score"]
                 score = score + 1
                 level = score // 100
-                currency = score //10
+                currency = score // 10
                 collection.update_one(
                     {"_id": message.author.id},
-                    {"$set": {"score": score,"currency":currency, "level": level}},
+                    {
+                        "$set": {
+                            "score": score,
+                            "currency": currency,
+                            "level": level,
+                        }
+                    },
                 )
-        await check_level_up(message.channel, message, collection)
+        await HandleLevel.check_level_up(message.channel, message, collection)
 
     @bot.command(name="get_currency")
-    async def on_message(message):
+    async def on_message(self, message):
         print("command noticed")
         if message.author in message.channel:
-            await check_level_up()
+            await HandleLevel.check_level_up()
 
-    bot.run(CONFIG["auth_token"])
-
+    # bot.run(CONFIG["auth_token"])

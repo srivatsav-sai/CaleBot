@@ -1,11 +1,12 @@
 from imports import *
 
 from settings import CONFIG
+from settings import TESTING_GUILD_ID
 
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds = True
-intents.presences = False
+intents.presences = True
 intents.message_content = True
 intents.voice_states = True
 intents.emojis = True
@@ -19,8 +20,6 @@ bot = discord.Client(intents=intents)
 message_cooldowns = {}
 user_cooldowns = {}
 
-TESTING_GUILD_ID = 1222575663869984778
-
 LINK_REGEX = r"(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})"
 MESSAGE_COOLDOWN = 10
 USER_COOLDOWN = 60
@@ -30,17 +29,23 @@ ALLOWED_LINK_DOMAINS = ["youtube.com"]
 ALLOWED_LINK_CHANNELS = []
 
 
-# class HandleMod(commands.Cog):
-#     def __init__(self, client):
-#         self.client = client
-if __name__ == "__main__":
-    def strip_url(url):
+class HandleMod(commands.Cog):
+    def __init__(self, client):
+        self.client = client
+
+    # if __name__ == "__main__":
+
+    def strip_url(self, url):
         url = re.sub(r"^(?:https?|ftp)://", "", url)
         url = re.sub(r"/.*$", "", url)
         return url
 
     @bot.event
-    async def on_message(message):
+    async def on_ready(self):
+        print(f"We have logged in as {bot.user}")
+
+    @bot.event
+    async def on_message(self, message):
         if message.author == bot.user:
             return
         print(message.author, message.channel.name, message.content, message.embeds)
@@ -48,7 +53,7 @@ if __name__ == "__main__":
         # anti-link system
         matches = re.findall(LINK_REGEX, message.content, re.IGNORECASE)
         for match in matches:
-            if strip_url(match) not in ALLOWED_LINK_DOMAINS:
+            if HandleMod.strip_url(match) not in ALLOWED_LINK_DOMAINS:
                 await message.delete()
                 await message.channel.send(
                     f"{message.author.mention}, links are not allowed in this channel."
@@ -117,10 +122,12 @@ if __name__ == "__main__":
         ),
     ):
         await interaction.guild.kick(user, reason=reason)
-        await interaction.send(f"test kick{user}", ephemeral=True)
+        await interaction.send(f"{user} has been kicked", ephemeral=True)
 
     @bot.slash_command(
-        name="ban", description="ban a person from server", guild_ids=[TESTING_GUILD_ID]
+        name="ban",
+        description="ban a person from server",
+        guild_ids=[TESTING_GUILD_ID],
     )
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_messages=True)
@@ -128,12 +135,17 @@ if __name__ == "__main__":
         self,
         interaction: discord.Interaction,
         user: discord.User = discord.SlashOption("ban", "ban a user from server"),
+        delete_message_days: discord.User = discord.SlashOption(
+            "delete_message_days", "delete this user's previous messages upto"
+        ),
         reason: str = discord.SlashOption(
             "reason", "provide a reason to ban the selected user"
         ),
     ):
-        await interaction.guild.ban(user, reason=reason)
-        await interaction.send(f"test ban{user}", ephemeral=True)
+        await interaction.guild.ban(
+            user, delete_message_days=delete_message_days, reason=reason
+        )
+        await interaction.send(f"{user} has been banned", ephemeral=True)
 
     @bot.slash_command(
         name="unban",
@@ -151,7 +163,7 @@ if __name__ == "__main__":
         ),
     ):
         await interaction.guild.unban(discord.User(id=user), reason=reason)
-        await interaction.send(f"test unban{user}", ephemeral=True)
+        await interaction.send(f"{user} has been unbanned", ephemeral=True)
 
     @bot.slash_command(
         name="timeout",
@@ -173,7 +185,7 @@ if __name__ == "__main__":
     ):
         delta = timedelta(minutes=timeout)
         await user.timeout(timeout=delta, reason=reason)
-        await interaction.send(f"test mute{user}", ephemeral=True)
+        await interaction.send(f"{user} has been muted", ephemeral=True)
 
     @bot.slash_command(
         name="nickname",
@@ -193,6 +205,50 @@ if __name__ == "__main__":
         ),
     ):
         await user.edit(nick=nickname)
-        await interaction.send(f"test nickname{user}", ephemeral=True)
+        await interaction.send(
+            f"Nickname of {user} has been changed.", ephemeral=True
+        )
 
-    bot.run(CONFIG["auth_token"])
+    @bot.slash_command(
+        name="roles",
+        description="nickname a person in server",
+        guild_ids=[TESTING_GUILD_ID],
+    )
+    @commands.has_permissions(administrator=True)
+    @application_checks.has_permissions(manage_roles=True)
+    async def manageRoles(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member = discord.SlashOption(
+            "user", "select a user to  their manage roles in server"
+        ),
+        manage_roles: str = discord.SlashOption(
+            "roles", "manage roles for the selected user"
+        ),
+    ):
+        await user.edit(roles=manage_roles)
+        await interaction.send(f"Roles have been updated to {user}", ephemeral=True)
+
+    @bot.slash_command(
+        name="drag",
+        description="drag a person in a vc in server",
+        guild_ids=[TESTING_GUILD_ID],
+    )
+    @commands.has_permissions(administrator=True)
+    @application_checks.has_permissions(move_members=True)
+    async def voiceDrag(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member = discord.SlashOption(
+            "user", "select a user to  their manage roles in server"
+        ),
+        change_vc: str = discord.SlashOption(
+            "drag", "change VC for the selected user"
+        ),
+    ):
+        await user.move_to(voice_channel=change_vc)
+        await interaction.send(
+            f"{user} has been dragged to {change_vc}", ephemeral=True
+        )
+
+    # bot.run(CONFIG["auth_token"])

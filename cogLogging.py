@@ -5,7 +5,7 @@ from settings import CONFIG
 intents = discord.Intents.default()
 intents.members = True
 intents.guilds = True
-intents.presences = False
+intents.presences = True
 intents.message_content = True
 intents.voice_states = True
 intents.emojis = True
@@ -18,28 +18,34 @@ bot = discord.Client(intents=intents)
 
 member_voice_times = {}
 
-TESTING_GUILD_ID = 748394748099821648
+TESTING_GUILD_ID = 1222575663869984778
 
-TARGETING_VOICE_CHANNELS = [748394748099821652, 1098631003381170217, 1222575664364916768, 1222575796686950480]
+TARGETING_VOICE_CHANNELS = [
+    748394748099821652,
+    1098631003381170217,
+    1222575664364916768,
+    1222575796686950480,
+]
 
 AUDIT_LOG_CHANNEL = 1140639586041729176
 
 MESSAGE_LOG_CHANNEL = 1226530095271776288
 
-# class HandleLog(commands.Cog):
-#     def __init__(self,client):
-#         self.client = client
 
-if __name__ == "__main__":
+class HandleLog(commands.Cog):
+    def __init__(self, client):
+        self.client = client
+
+    # if __name__ == "__main__":
 
     @bot.event
-    async def on_ready():
+    async def on_ready(self):
         print(f"We have logged in as {bot.user}")
 
     def get_current_unix_time():
         return int(time.time())
 
-    def get_time_difference(timestamp1, timestamp2):
+    def get_time_difference(self, timestamp1, timestamp2):
         diff = abs(timestamp1 - timestamp2)
 
         if diff < 60:
@@ -56,7 +62,7 @@ if __name__ == "__main__":
 
     current_time = get_current_unix_time()
 
-    async def log_message(message):
+    async def log_message(self, message):
         # if MESSAGE_LOG_CHANNEL:
         #     message_log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL)
         #     if message_log_channel:
@@ -67,7 +73,7 @@ if __name__ == "__main__":
             if audit_channel:
                 await audit_channel.send(message)
 
-    async def log_event(event_type, user, content):
+    async def log_event(self, event_type, user, content):
         # log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL)
         # if log_channel:
         #     embed = discord.Embed(title=event_type, description=content)
@@ -87,29 +93,33 @@ if __name__ == "__main__":
             await log_channel.send(embed=embed)
 
     @bot.event
-    async def on_message(message):
+    async def on_message(self, message):
         if message.author.id != bot.application_id:
-            await log_event("Message sent", message.author, message.content)
+            await HandleLog.log_event(
+                "Message sent", message.author, message.content
+            )
 
     @bot.event
-    async def on_message_delete(message):
+    async def on_message_delete(self, message):
         if message.author.id != bot.application_id:
-            await log_event("Message Deleted", message.author, message.content)
+            await HandleLog.log_event(
+                "Message Deleted", message.author, message.content
+            )
 
     @bot.event
-    async def on_message_edit(before, after):
+    async def on_message_edit(self, before, after):
         if (
             before.author.id != bot.application_id
             and after.author.id != bot.application_id
         ):
-            await log_event(
+            await HandleLog.log_event(
                 "Message Edited",
                 before.author,
                 f"**Before:** {before.content}\n**After:** {after.content}",
             )
 
     @bot.event
-    async def on_voice_state_update(member, before, after):
+    async def on_voice_state_update(self, member, before, after):
 
         if member.id != bot.application_id:
 
@@ -125,7 +135,9 @@ if __name__ == "__main__":
                 and after.channel is None
             ):
 
-                channel_id = after.channel.id if after.channel else before.channel.id
+                channel_id = (
+                    after.channel.id if after.channel else before.channel.id
+                )
                 channel_name = (
                     after.channel.name if after.channel else before.channel.name
                 )
@@ -134,7 +146,7 @@ if __name__ == "__main__":
                     member_voice_times[(member, channel_id)] = datetime.now(
                         timezone.utc
                     )
-                    await log_event(
+                    await HandleLog.log_event(
                         "Voice Channel Joined",
                         member,
                         f"{member.mention} joined voice channel: {channel_name}",
@@ -145,11 +157,11 @@ if __name__ == "__main__":
                         delta = datetime.now(timezone.utc) - join_time
                         del member_voice_times[(member, channel_id)]
                         log_message = f"{member.name} (ID: {member.id}) stayed in {channel_name} for {delta.seconds} seconds."
-                        await log_event(
+                        await HandleLog.log_event(
                             "Voice Channel Left (Duration)", member, log_message
                         )
 
-    async def on_member_update(before, after):
+    async def on_member_update(self, before, after):
 
         if (
             before.author.id != bot.application_id
@@ -157,21 +169,23 @@ if __name__ == "__main__":
         ):
 
             if before.roles != after.roles:
-                added_roles = [role for role in after.roles if role not in before.roles]
+                added_roles = [
+                    role for role in after.roles if role not in before.roles
+                ]
                 removed_roles = [
                     role for role in before.roles if role not in after.roles
                 ]
                 log_message = f"Member Role Update: {after.name} (ID: {after.id})\n"
                 if added_roles:
-                    log_message += (
-                        f"Added Roles: {', '.join(role.name for role in added_roles)}\n"
-                    )
+                    log_message += f"Added Roles: {', '.join(role.name for role in added_roles)}\n"
                 if removed_roles:
                     log_message += f"Removed Roles: {', '.join(role.name for role in removed_roles)}\n"
-                await log_event("Member Updated", before, f"{log_message}")
+                await HandleLog.log_event(
+                    "Member Updated", before, f"{log_message}"
+                )
 
     @bot.event
-    async def on_reaction_add(reaction, user):
+    async def on_reaction_add(self, reaction, user):
 
         if user.id != bot.application_id:
 
@@ -183,6 +197,6 @@ if __name__ == "__main__":
             log_message += f"Message Channel: {message.channel.name}\n"
             log_message += f"Message: {message.content}\n"
             log_message += f"Reaction: {emoji}"
-            await log_event("Reaction Added", user, f"{log_message}")
+            await HandleLog.log_event("Reaction Added", user, f"{log_message}")
 
-    bot.run(CONFIG["auth_token"])
+    # bot.run(CONFIG["auth_token"])

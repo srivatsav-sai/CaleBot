@@ -3,6 +3,7 @@ from imports import *
 from cogModeration import HandleMod
 from cogLeveling import HandleLevel
 from cogLogging import HandleLog
+from cogMusic import HandleMusic
 
 from settings import CONFIG
 
@@ -34,12 +35,13 @@ async def do_shutdown(client):
     )
 
 
-if __name__ == "__main__":
+if(__name__ == "__main__"):
     # bot.remove_command("help")
-    # bot.add_cog(HandleMod(bot))
+    bot.add_cog(HandleMod(bot))
     # bot.add_cog(HandleDB(bot))
-    # bot.add_cog(HandleLevel(bot))
-    # bot.add_cog(HandleLog(bot))
+    bot.add_cog(HandleLevel(bot))
+    bot.add_cog(HandleLog(bot))
+    bot.add_cog(HandleMusic(bot))
 
     # -- run bot --#
     try:
