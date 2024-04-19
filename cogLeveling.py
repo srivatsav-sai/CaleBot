@@ -62,9 +62,9 @@ if __name__ == "__main__":
     @bot.event
     async def on_message(message):
 
-        if message.author == bot.user:
-            return
-        print(message.author, message.channel.name, message.content, message.embeds)
+        # if message.author == bot.user:
+        #     return
+        # print(message.author, message.channel.name, message.content, message.embeds)
 
         myquery = {"_id": message.author.id}
         if collection.count_documents(myquery) == 0:

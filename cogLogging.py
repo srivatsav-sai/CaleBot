@@ -93,6 +93,11 @@ if __name__ == "__main__":
 
     @bot.event
     async def on_message(message):
+
+        if message.author == bot.user:
+            return
+        print(message.author, message.channel.name, message.content, message.embeds)
+        
         if message.author.id != bot.application_id:
             await log_event(
                 "Message sent", message.author, message.content
