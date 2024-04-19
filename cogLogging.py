@@ -1,6 +1,7 @@
 from imports import *
 
 from settings import CONFIG
+from settings import TESTING_GUILD_ID
 
 intents = discord.Intents.default()
 intents.members = True
@@ -18,34 +19,32 @@ bot = discord.Client(intents=intents)
 
 member_voice_times = {}
 
-TESTING_GUILD_ID = 1222575663869984778
-
 TARGETING_VOICE_CHANNELS = [
     748394748099821652,
     1098631003381170217,
     1222575664364916768,
-    1222575796686950480,
+    1222575796686950480
 ]
 
-AUDIT_LOG_CHANNEL = 1140639586041729176
+AUDIT_LOG_CHANNEL = 1222575735332409495
 
-MESSAGE_LOG_CHANNEL = 1226530095271776288
+MESSAGE_LOG_CHANNEL = 1222575735332409495
 
 
-class HandleLog(commands.Cog):
-    def __init__(self, client):
-        self.client = client
+# class HandleLog(commands.Cog):
+#     def __init__(self, client):
+#         self.client = client
 
-    # if __name__ == "__main__":
+if __name__ == "__main__":
 
     @bot.event
-    async def on_ready(self):
+    async def on_ready():
         print(f"We have logged in as {bot.user}")
 
     def get_current_unix_time():
         return int(time.time())
 
-    def get_time_difference(self, timestamp1, timestamp2):
+    def get_time_difference(timestamp1, timestamp2):
         diff = abs(timestamp1 - timestamp2)
 
         if diff < 60:
@@ -62,7 +61,7 @@ class HandleLog(commands.Cog):
 
     current_time = get_current_unix_time()
 
-    async def log_message(self, message):
+    async def log_message(message):
         # if MESSAGE_LOG_CHANNEL:
         #     message_log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL)
         #     if message_log_channel:
@@ -73,7 +72,7 @@ class HandleLog(commands.Cog):
             if audit_channel:
                 await audit_channel.send(message)
 
-    async def log_event(self, event_type, user, content):
+    async def log_event(event_type, user, content):
         # log_channel = bot.get_channel(MESSAGE_LOG_CHANNEL)
         # if log_channel:
         #     embed = discord.Embed(title=event_type, description=content)
@@ -93,33 +92,33 @@ class HandleLog(commands.Cog):
             await log_channel.send(embed=embed)
 
     @bot.event
-    async def on_message(self, message):
+    async def on_message(message):
         if message.author.id != bot.application_id:
-            await HandleLog.log_event(
+            await log_event(
                 "Message sent", message.author, message.content
             )
 
     @bot.event
-    async def on_message_delete(self, message):
+    async def on_message_delete(message):
         if message.author.id != bot.application_id:
-            await HandleLog.log_event(
+            await log_event(
                 "Message Deleted", message.author, message.content
             )
 
     @bot.event
-    async def on_message_edit(self, before, after):
+    async def on_message_edit(before, after):
         if (
             before.author.id != bot.application_id
             and after.author.id != bot.application_id
         ):
-            await HandleLog.log_event(
+            await log_event(
                 "Message Edited",
                 before.author,
                 f"**Before:** {before.content}\n**After:** {after.content}",
             )
 
     @bot.event
-    async def on_voice_state_update(self, member, before, after):
+    async def on_voice_state_update(member, before, after):
 
         if member.id != bot.application_id:
 
@@ -146,7 +145,7 @@ class HandleLog(commands.Cog):
                     member_voice_times[(member, channel_id)] = datetime.now(
                         timezone.utc
                     )
-                    await HandleLog.log_event(
+                    await log_event(
                         "Voice Channel Joined",
                         member,
                         f"{member.mention} joined voice channel: {channel_name}",
@@ -157,11 +156,11 @@ class HandleLog(commands.Cog):
                         delta = datetime.now(timezone.utc) - join_time
                         del member_voice_times[(member, channel_id)]
                         log_message = f"{member.name} (ID: {member.id}) stayed in {channel_name} for {delta.seconds} seconds."
-                        await HandleLog.log_event(
+                        await log_event(
                             "Voice Channel Left (Duration)", member, log_message
                         )
 
-    async def on_member_update(self, before, after):
+    async def on_member_update(before, after):
 
         if (
             before.author.id != bot.application_id
@@ -180,12 +179,12 @@ class HandleLog(commands.Cog):
                     log_message += f"Added Roles: {', '.join(role.name for role in added_roles)}\n"
                 if removed_roles:
                     log_message += f"Removed Roles: {', '.join(role.name for role in removed_roles)}\n"
-                await HandleLog.log_event(
+                await log_event(
                     "Member Updated", before, f"{log_message}"
                 )
 
     @bot.event
-    async def on_reaction_add(self, reaction, user):
+    async def on_reaction_add(reaction, user):
 
         if user.id != bot.application_id:
 
@@ -197,6 +196,6 @@ class HandleLog(commands.Cog):
             log_message += f"Message Channel: {message.channel.name}\n"
             log_message += f"Message: {message.content}\n"
             log_message += f"Reaction: {emoji}"
-            await HandleLog.log_event("Reaction Added", user, f"{log_message}")
+            await log_event("Reaction Added", user, f"{log_message}")
 
-    # bot.run(CONFIG["auth_token"])
+    bot.run(CONFIG["auth_token"])

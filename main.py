@@ -7,7 +7,7 @@ from cogMusic import HandleMusic
 
 from settings import CONFIG
 
-TESTING_GUILD_ID = 1222575663869984778
+from settings import TESTING_GUILD_ID
 
 intents = discord.Intents.default()
 intents.members = True

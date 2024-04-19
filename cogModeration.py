@@ -29,23 +29,23 @@ ALLOWED_LINK_DOMAINS = ["youtube.com"]
 ALLOWED_LINK_CHANNELS = []
 
 
-class HandleMod(commands.Cog):
-    def __init__(self, client):
-        self.client = client
+# class HandleMod(commands.Cog):
+#     def __init__(self, client):
+#         self.client = client
 
-    # if __name__ == "__main__":
+if __name__ == "__main__":
 
-    def strip_url(self, url):
+    def strip_url(url):
         url = re.sub(r"^(?:https?|ftp)://", "", url)
         url = re.sub(r"/.*$", "", url)
         return url
 
     @bot.event
-    async def on_ready(self):
+    async def on_ready():
         print(f"We have logged in as {bot.user}")
 
     @bot.event
-    async def on_message(self, message):
+    async def on_message(message):
         if message.author == bot.user:
             return
         print(message.author, message.channel.name, message.content, message.embeds)
@@ -53,7 +53,7 @@ class HandleMod(commands.Cog):
         # anti-link system
         matches = re.findall(LINK_REGEX, message.content, re.IGNORECASE)
         for match in matches:
-            if HandleMod.strip_url(match) not in ALLOWED_LINK_DOMAINS:
+            if strip_url(match) not in ALLOWED_LINK_DOMAINS:
                 await message.delete()
                 await message.channel.send(
                     f"{message.author.mention}, links are not allowed in this channel."
@@ -103,7 +103,7 @@ class HandleMod(commands.Cog):
     @bot.slash_command(
         description="My first slash command", guild_ids=[TESTING_GUILD_ID]
     )
-    async def hello(self, interaction: discord.Interaction):
+    async def hello(interaction: discord.Interaction):
         await interaction.send("Hello!")
 
     @bot.slash_command(
@@ -114,7 +114,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_messages=True)
     async def memberKick(
-        self,
+        
         interaction: discord.Interaction,
         user: discord.User = discord.SlashOption("kick", "kick a user from server"),
         reason: str = discord.SlashOption(
@@ -132,7 +132,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_messages=True)
     async def memberBan(
-        self,
+        
         interaction: discord.Interaction,
         user: discord.User = discord.SlashOption("ban", "ban a user from server"),
         delete_message_days: discord.User = discord.SlashOption(
@@ -155,7 +155,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_messages=True)
     async def memberUnban(
-        self,
+        
         interaction: discord.Interaction,
         user: str = discord.SlashOption("unban", "unban a user from server"),
         reason: str = discord.SlashOption(
@@ -173,7 +173,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_messages=True)
     async def memberMute(
-        self,
+        
         interaction: discord.Interaction,
         timeout: int,
         user: discord.Member = discord.SlashOption(
@@ -195,7 +195,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_nicknames=True)
     async def changeNick(
-        self,
+        
         interaction: discord.Interaction,
         user: discord.Member = discord.SlashOption(
             "user", "select a user to change nickname in server"
@@ -217,7 +217,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(manage_roles=True)
     async def manageRoles(
-        self,
+        
         interaction: discord.Interaction,
         user: discord.Member = discord.SlashOption(
             "user", "select a user to  their manage roles in server"
@@ -237,7 +237,7 @@ class HandleMod(commands.Cog):
     @commands.has_permissions(administrator=True)
     @application_checks.has_permissions(move_members=True)
     async def voiceDrag(
-        self,
+        
         interaction: discord.Interaction,
         user: discord.Member = discord.SlashOption(
             "user", "select a user to  their manage roles in server"
@@ -251,4 +251,4 @@ class HandleMod(commands.Cog):
             f"{user} has been dragged to {change_vc}", ephemeral=True
         )
 
-    # bot.run(CONFIG["auth_token"])
+    bot.run(CONFIG["auth_token"])

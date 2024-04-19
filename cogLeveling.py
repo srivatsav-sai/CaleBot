@@ -1,6 +1,7 @@
 from imports import *
 
 from settings import CONFIG
+from settings import TESTING_GUILD_ID
 
 intents = discord.Intents.default()
 intents.members = True
@@ -22,20 +23,20 @@ db = cluster["bottesting1"]
 collection = db["discordserver"]
 
 
-class HandleLevel(commands.Cog):
-    def __init__(self, client):
-        self.client = client
+# class HandleLevel(commands.Cog):
+#     def __init__(self, client):
+#         self.client = client
 
     # logging.basicConfig(level=logging.DEBUG)
 
-    # if __name__ == "__main__":
+if __name__ == "__main__":
 
     @bot.event
-    async def on_ready(self):
+    async def on_ready():
         print(f"We have logged in as {bot.user}")
 
     @bot.event
-    async def check_level_up(self, channel, message, collection):
+    async def check_level_up(channel, message, collection):
         query = {"_id": message.author.id}
         user = collection.find_one(query)
 
@@ -55,11 +56,11 @@ class HandleLevel(commands.Cog):
             currency = score // 10
             log_message = f"{message.author.mention}"
             await channel.send(
-                f"Congratulations, {log_message}! You now have {currency} units of currency!"
+                f"Congratulations, {log_message}! You now have {currency} unit{'s' if  currency > 1 else ''} currency!"
             )
 
     @bot.event
-    async def on_message(self, message):
+    async def on_message(message):
 
         if message.author == bot.user:
             return
@@ -94,12 +95,12 @@ class HandleLevel(commands.Cog):
                         }
                     },
                 )
-        await HandleLevel.check_level_up(message.channel, message, collection)
+        await check_level_up(message.channel, message, collection)
 
     @bot.command(name="get_currency")
-    async def on_message(self, message):
+    async def on_message(message):
         print("command noticed")
         if message.author in message.channel:
-            await HandleLevel.check_level_up()
+            await check_level_up()
 
-    # bot.run(CONFIG["auth_token"])
+    bot.run(CONFIG["auth_token"])

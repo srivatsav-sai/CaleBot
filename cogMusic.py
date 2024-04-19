@@ -1,6 +1,7 @@
 from imports import *
 
 from settings import CONFIG
+from settings import TESTING_GUILD_ID
 
 intents = discord.Intents.default()
 intents.members = True
@@ -34,25 +35,29 @@ ydl_opts = {
 }
 
 
-class HandleMusic(commands.Cog):
-    def __init__(self, client):
-        self.client = client
+# class HandleMusic(commands.Cog):
+#     def __init__(self, client):
+#         self.client = client
 
-    # if __name__ == "__main__":
+if __name__ == "__main__":
 
-    def delete_songs(self):
+    @bot.event
+    async def on_ready():
+        print(f"We have logged in as {bot.user}")
+
+    def delete_songs():
         for file in os.listdir():
             if file.endswith(".mp3"):
                 os.remove(file)
 
-    def get_youtube_url(self, search_term, result_index=0):
+    def get_youtube_url(search_term, result_index=0):
         results = Search(search_term).results
         if results:
             return results[result_index].watch_url
         else:
             return None
 
-    async def play_queue(self, ctx):
+    async def play_queue(ctx):
         global music_queue
         # global next_url
         global disconnect_now
@@ -89,83 +94,83 @@ class HandleMusic(commands.Cog):
 
             music_queue = deque()
 
-        @bot.event
-        async def on_ready(self):
-            print(f"We have logged in as {bot.user}")
+    @bot.event
+    async def on_ready():
+        print(f"We have logged in as {bot.user}")
 
-        @bot.command(self, name="play", aliases=["connect", "join", "next", "add"])
-        async def streamx(ctx, url):
-            global music_queue
-            if "youtu" not in url:
-                url = HandleMusic.get_youtube_url(url)
+    @bot.command(name="play", aliases=["connect", "join", "next", "add"])
+    async def streamx(ctx, url):
+        global music_queue
+        if "youtu" not in url:
+            url = get_youtube_url(url)
 
-            music_queue.append(url)
-            await ctx.send("Song added to the queue.")
+        music_queue.append(url)
+        await ctx.send("Song added to the queue.")
 
-            if not ctx.message.author.voice:
-                await ctx.send("You need to be in a voice channel to play music.")
-                return
-            voiceChannel = ctx.message.author.voice.channel
+        if not ctx.message.author.voice:
+            await ctx.send("You need to be in a voice channel to play music.")
+            return
+        voiceChannel = ctx.message.author.voice.channel
 
-            if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
-                pass
-            else:
-                await voiceChannel.connect()
+        if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
+            pass
+        else:
+            await voiceChannel.connect()
+            await ctx.send(
+                f"Playing on channel {ctx.message.author.voice.channel}"
+            )
+
+            try:
+                await play_queue(ctx)
+            except Exception as e:
+                print(f"Error during playback: {e}")
                 await ctx.send(
-                    f"Playing on channel {ctx.message.author.voice.channel}"
+                    "An error occurred while playing music. Please try again later."
                 )
 
-                try:
-                    await HandleMusic.play_queue(ctx)
-                except Exception as e:
-                    print(f"Error during playback: {e}")
-                    await ctx.send(
-                        "An error occurred while playing music. Please try again later."
-                    )
+    @bot.command(name="resume")
+    async def resume(ctx):
 
-        @bot.command(name="resume")
-        async def resume(self, ctx):
-
-            if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
-                ctx.voice_client.resume()
-                await ctx.send("Playback resumed.")
-            else:
-                await ctx.send(
-                    "Not connected to a voice channel or no song was previously playing."
-                )
-
-        @bot.command(name="pause")
-        async def pause(self, ctx):
-
-            ctx.voice_client.pause()
-
-            await ctx.send("Playback paused.")
-
-        @bot.command(name="disconnect", aliases=["dc", "boot", "stop"])
-        async def disconnect(self, ctx):
-            global music_queue
-            global disconnect_now
-
-            music_queue = deque()
-
-            disconnect_now = True
-            await asyncio.sleep(2)
-
-            HandleMusic.delete_songs()
-
-            await ctx.send("Player disconnected.")
-
-        @bot.command(name="skip")
-        async def skip(self, ctx):
-            global disconnect_now
-
-            ctx.voice_client.stop()
-
-            disconnect_now = True
-            await asyncio.sleep(2)
-
+        if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
             ctx.voice_client.resume()
+            await ctx.send("Playback resumed.")
+        else:
+            await ctx.send(
+                "Not connected to a voice channel or no song was previously playing."
+            )
 
-            await ctx.send("Song skipped.")
+    @bot.command(name="pause")
+    async def pause(ctx):
 
-        # bot.run(CONFIG["auth_token"])
+        ctx.voice_client.pause()
+
+        await ctx.send("Playback paused.")
+
+    @bot.command(name="disconnect", aliases=["dc", "boot", "stop"])
+    async def disconnect(ctx):
+        global music_queue
+        global disconnect_now
+
+        music_queue = deque()
+
+        disconnect_now = True
+        await asyncio.sleep(2)
+
+        delete_songs()
+
+        await ctx.send("Player disconnected.")
+
+    @bot.command(name="skip")
+    async def skip(ctx):
+        global disconnect_now
+
+        ctx.voice_client.stop()
+
+        disconnect_now = True
+        await asyncio.sleep(2)
+
+        ctx.voice_client.resume()
+
+        await ctx.send("Song skipped.")
+
+    bot.run(CONFIG["auth_token"])
