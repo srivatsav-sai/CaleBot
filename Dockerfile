@@ -9,4 +9,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . /app/
 ENV TOKEN=""
-CMD [Subprocess.run("python3 cogLeveling.py","python3 cogLogging.py","python3 cogModeration.py","python3 cogMusic.py")]
+CMD ["python3", "main.py"]
