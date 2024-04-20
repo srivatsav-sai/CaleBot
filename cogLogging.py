@@ -35,11 +35,11 @@ MESSAGE_LOG_CHANNEL = 1222575735332409495
 #     def __init__(self, client):
 #         self.client = client
 
-if __name__ == "__main__":
+if(__name__ == "__main__"):
 
     @bot.event
     async def on_ready():
-        print(f"We have logged in as {bot.user}")
+        print(f"{bot.user} has logged in")
 
     def get_current_unix_time():
         return int(time.time())

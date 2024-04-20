@@ -1,9 +1,13 @@
 from imports import *
+import cogLeveling
+import cogLogging
+import cogModeration
+import cogMusic
 
-from cogModeration import HandleMod
-from cogLeveling import HandleLevel
-from cogLogging import HandleLog
-from cogMusic import HandleMusic
+# from cogModeration import HandleMod
+# from cogLeveling import HandleLevel
+# from cogLogging import HandleLog
+# from cogMusic import HandleMusic
 
 from settings import CONFIG
 
@@ -23,6 +27,9 @@ intents.messages = True
 
 bot = discord.Client(intents=intents)
 
+def run_function(func):
+    result = func()
+    return result
 
 @bot.event
 async def on_ready():
@@ -37,11 +44,27 @@ async def do_shutdown(client):
 
 if(__name__ == "__main__"):
     # bot.remove_command("help")
-    bot.add_cog(HandleMod(bot))
-    # bot.add_cog(HandleDB(bot))
-    bot.add_cog(HandleLevel(bot))
-    bot.add_cog(HandleLog(bot))
-    bot.add_cog(HandleMusic(bot))
+    # bot.add_cog(HandleMod(bot))
+
+    @bot.event
+    async def on_ready():
+        print(f"{bot.user} has logged in")
+
+    num_processes = 4
+    pool = multiprocessing.Pool(processes=num_processes)
+
+    functions = [cogLeveling.bot.run(),
+                 cogLogging.bot.run(),
+                 cogModeration.bot.run(),
+                 cogMusic.bot.run()]
+    
+    results = pool.map(run_function, functions)
+
+    print("Results:", results)
+
+    pool.close()
+    pool.join()
+
 
     # -- run bot --#
     try:

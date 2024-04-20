@@ -39,11 +39,11 @@ ydl_opts = {
 #     def __init__(self, client):
 #         self.client = client
 
-if __name__ == "__main__":
+if(__name__ == "__main__"):
 
     @bot.event
     async def on_ready():
-        print(f"We have logged in as {bot.user}")
+        print(f"{bot.user} has logged in")
 
     def delete_songs():
         for file in os.listdir():

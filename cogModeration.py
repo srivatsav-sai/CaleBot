@@ -33,7 +33,7 @@ ALLOWED_LINK_CHANNELS = []
 #     def __init__(self, client):
 #         self.client = client
 
-if __name__ == "__main__":
+if(__name__ == "__main__"):
 
     def strip_url(url):
         url = re.sub(r"^(?:https?|ftp)://", "", url)
@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     @bot.event
     async def on_ready():
-        print(f"We have logged in as {bot.user}")
+        print(f"{bot.user} has logged in")
 
     @bot.event
     async def on_message(message):
@@ -101,7 +101,7 @@ if __name__ == "__main__":
             user_cooldowns[author] = [current_time]
 
     @bot.slash_command(
-        description="My first slash command", guild_ids=[TESTING_GUILD_ID]
+        description="hello", guild_ids=[TESTING_GUILD_ID]
     )
     async def hello(interaction: discord.Interaction):
         await interaction.send("Hello!")

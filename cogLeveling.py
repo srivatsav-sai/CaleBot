@@ -29,11 +29,11 @@ collection = db["discordserver"]
 
     # logging.basicConfig(level=logging.DEBUG)
 
-if __name__ == "__main__":
+if(__name__ == "__main__"):
 
     @bot.event
     async def on_ready():
-        print(f"We have logged in as {bot.user}")
+        print(f"{bot.user} has logged in")
 
     @bot.event
     async def check_level_up(channel, message, collection):

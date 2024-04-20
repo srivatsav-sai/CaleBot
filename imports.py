@@ -9,6 +9,7 @@ import logging
 import collections
 import urllib
 import os
+import multiprocessing
 from pymongo import MongoClient
 from nextcord.ext import application_checks
 from nextcord.ext import commands
