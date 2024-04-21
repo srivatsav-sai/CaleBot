@@ -2,21 +2,15 @@ import nextcord as discord
 import time
 import re
 import asyncio
-from pymongo import MongoClient
-from nextcord.ext import application_checks
-from nextcord.ext import commands
-from datetime import datetime, timedelta, timezone
-from collections import deque
 import yt_dlp as youtube_dl
-import asyncio
 import os
 import configparser
 import tempfile
-
+from pymongo import MongoClient
+from nextcord.ext import application_checks, commands
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from pytube import Search
-from settings import CONFIG
-from settings import TESTING_GUILD_ID
 
 intents = discord.Intents.default()
 intents.members = True
@@ -424,7 +418,7 @@ async def memberBan(
 @bot.slash_command(
     name="temp_ban",
     description="temporarily ban a person from server",
-    guild_ids=[TESTING_GUILD_ID],
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_permissions(manage_messages=True)
