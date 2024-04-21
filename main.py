@@ -10,9 +10,11 @@ from collections import deque
 import yt_dlp as youtube_dl
 import asyncio
 import os
+import configparser
+import tempfile
+
 from collections import deque
 from pytube import Search
-
 from settings import CONFIG
 from settings import TESTING_GUILD_ID
 
@@ -56,20 +58,28 @@ ydl_opts = {
     ],
 }
 
+config = configparser.ConfigParser()
+config.read("config.ini")
+
+cluster = MongoClient(config.get("DATABASE", "mongodb_uri"))
+db = cluster[config.get("DATABASE", "database_name")]
+collection = db[config.get("DATABASE", "collection_name")]
+banlist = db[config.get("DATABASE", "banlist_collection")]
+
 TARGETING_VOICE_CHANNELS = [
-    748394748099821652,
-    1098631003381170217,
-    1222575664364916768,
-    1222575796686950480,
+    int(x) for x in config.get("VOICE", "targeting_voice_channels").split(",")
+]
+LINK_REGEX = config.get("ANTI_LINK", "link_regex")
+MESSAGE_COOLDOWN = config.getint("ANTI_SPAM", "message_cooldown")
+USER_COOLDOWN = config.getint("ANTI_SPAM", "user_cooldown")
+MAX_MESSAGES_PER_BURST = config.getint("ANTI_SPAM", "max_messages_per_burst")
+AUDIT_LOG_CHANNEL = config.getint("CHANNELS", "bot_audit_channel")
+ALLOWED_LINK_DOMAINS = config.get("ANTI_LINK", "allowed_link_domains").split(",")
+ALLOWED_LINK_CHANNELS = [
+    int(x) for x in config.get("ANTI_LINK", "allowed_link_channels").split(",")
 ]
 
-LINK_REGEX = r"(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})"
-MESSAGE_COOLDOWN = 10
-USER_COOLDOWN = 60
-MAX_MESSAGES_PER_BURST = 5
-AUDIT_LOG_CHANNEL = 1222575735332409495
-ALLOWED_LINK_DOMAINS = ["youtube.com"]
-ALLOWED_LINK_CHANNELS = []
+# Logging functions
 
 
 async def log_message(message):
@@ -91,10 +101,16 @@ async def log_event(event_type, user, content):
             await log_channel.send(embed=embed)
 
 
+# Anti-link functions
+
+
 def strip_url(url):
     url = re.sub(r"^(?:https?|ftp)://", "", url)
     url = re.sub(r"/.*$", "", url)
     return url
+
+
+# Bot events
 
 
 @bot.event
@@ -131,7 +147,10 @@ async def check_level_up(channel, message, collection):
             f"Congratulations, {log_message}! You now have {currency} unit{'s' if  currency > 1 else ''} currency!"
         )
 
-async def schedule_unban_task(user_to_unban: discord.Member, guild: discord.Guild, unban_time: datetime):
+
+async def schedule_unban_task(
+    user_to_unban: discord.Member, guild: discord.Guild, unban_time: datetime
+):
 
     delta = unban_time - datetime.now(datetime.timezone.utc)
     delay = max(delta.total_seconds(), 0)
@@ -140,8 +159,8 @@ async def schedule_unban_task(user_to_unban: discord.Member, guild: discord.Guil
     await unban_tasks.put(task)
     print(f"User {user_to_unban} scheduled for unban at {unban_time}")
 
-async def background_unban_task():
 
+async def background_unban_task():
     while True:
         delay, user_to_unban, guild = await unban_tasks.get()
 
@@ -156,7 +175,6 @@ async def background_unban_task():
 
 @bot.event
 async def on_message(message):
-
     if message.author == bot.user:
         return
     print(message.author, message.channel.name, message.content, message.embeds)
@@ -165,13 +183,15 @@ async def on_message(message):
         await log_event("Message sent", message.author, message.content)
 
     # anti-link system
-    matches = re.findall(LINK_REGEX, message.content, re.IGNORECASE)
-    for match in matches:
-        if strip_url(match) not in ALLOWED_LINK_DOMAINS:
-            await message.delete()
-            await message.channel.send(
-                f"{message.author.mention}, links are not allowed in this channel."
-            )
+
+    if message.channel.id not in ALLOWED_LINK_CHANNELS:
+        matches = re.findall(LINK_REGEX, message.content, re.IGNORECASE)
+        for match in matches:
+            if strip_url(match) not in ALLOWED_LINK_DOMAINS:
+                await message.delete()
+                await message.channel.send(
+                    f"{message.author.mention}, links are not allowed in this channel."
+                )
 
     author = message.author
     current_time = time.time()
@@ -187,7 +207,7 @@ async def on_message(message):
                 delta = timedelta(minutes=1)
                 await author.timeout(
                     timeout=delta,
-                    reason=f"{author.mention}, please wait {MESSAGE_COOLDOWN - (current_time - message_cooldowns[author]):.2f}seconds before sending another message.",
+                    reason=f"{author.mention}, please wait {MESSAGE_COOLDOWN - (current_time - message_cooldowns[author]):.2f} seconds before sending another message.",
                 )
             return
     else:
@@ -213,6 +233,8 @@ async def on_message(message):
             user_cooldowns[author] = [current_time]
     else:
         user_cooldowns[author] = [current_time]
+
+#Level and Currency System
 
     myquery = {"_id": message.author.id}
     if collection.count_documents(myquery) == 0:
@@ -247,6 +269,7 @@ async def on_message(message):
     await check_level_up(message.channel, message, collection)
     await bot.process_commands(message)
 
+
 @bot.event
 async def on_message_delete(message):
     if message.author.id != bot.application_id:
@@ -265,9 +288,7 @@ async def on_message_edit(before, after):
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-
     if member.id != bot.application_id:
-
         target_voice_channel_ids = TARGETING_VOICE_CHANNELS
 
         if (
@@ -279,7 +300,6 @@ async def on_voice_state_update(member, before, after):
             and before.channel.id in target_voice_channel_ids
             and after.channel is None
         ):
-
             channel_id = after.channel.id if after.channel else before.channel.id
             channel_name = after.channel.name if after.channel else before.channel.name
 
@@ -303,9 +323,7 @@ async def on_voice_state_update(member, before, after):
 
 @bot.event
 async def on_member_update(before, after):
-
     if before.author.id != bot.application_id and after.author.id != bot.application_id:
-
         if before.roles != after.roles:
             added_roles = [role for role in after.roles if role not in before.roles]
             removed_roles = [role for role in before.roles if role not in after.roles]
@@ -323,9 +341,7 @@ async def on_member_update(before, after):
 
 @bot.event
 async def on_reaction_add(reaction, user):
-
     if user.id != bot.application_id:
-
         message = reaction.message
         emoji = reaction.emoji
 
@@ -336,16 +352,17 @@ async def on_reaction_add(reaction, user):
         log_message += f"Reaction: {emoji}"
         await log_event("Reaction Added", user, f"{log_message}")
 
+# Slash commands
 
 @bot.slash_command(
     name="get_currency",
     description="To show how much currency you have",
-    guild_ids=[TESTING_GUILD_ID],
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 async def getCurrency(interaction: discord.Interaction):
     query = {"_id": interaction.user.id}
     user = collection.find_one(query)
-    currency = user.get("currency", 0)
+    currency = user.get("currency", 0) if user else 0
 
     await interaction.send(f"You have {currency} currency", ephemeral=True)
 
@@ -353,28 +370,28 @@ async def getCurrency(interaction: discord.Interaction):
 @bot.slash_command(
     name="get_level",
     description="To show how many levels you gained",
-    guild_ids=[TESTING_GUILD_ID],
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 async def getLevels(interaction: discord.Interaction):
     query = {"_id": interaction.user.id}
     user = collection.find_one(query)
-    level = user.get("level", 0)
+    level = user.get("level", 0) if user else 0
 
     await interaction.send(f"You have reached level {level}", ephemeral=True)
 
 
 @bot.slash_command(
     name="kick",
-    description="kick a person from server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Kick a person from server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_permissions(manage_messages=True)
 async def memberKick(
     interaction: discord.Interaction,
-    user: discord.User = discord.SlashOption("kick", "kick a user from server"),
+    user: discord.User = discord.SlashOption("kick", "Kick a user from server"),
     reason: str = discord.SlashOption(
-        "reason", "provide a reason to kick the selected user"
+        "reason", "Provide a reason to kick the selected user"
     ),
 ):
     await interaction.guild.kick(user, reason=reason)
@@ -383,19 +400,19 @@ async def memberKick(
 
 @bot.slash_command(
     name="ban",
-    description="ban a person from server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Ban a person from server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_permissions(manage_messages=True)
 async def memberBan(
     interaction: discord.Interaction,
-    user: discord.User = discord.SlashOption("ban", "ban a user from server"),
+    user: discord.User = discord.SlashOption("ban", "Ban a user from server"),
     delete_message_days: int = discord.SlashOption(
-        "delete_message_days", "delete this user's previous messages upto"
+        "delete_message_days", "Delete this user's previous messages up to"
     ),
     reason: str = discord.SlashOption(
-        "reason", "provide a reason to ban the selected user"
+        "reason", "Provide a reason to ban the selected user"
     ),
 ):
     await interaction.guild.ban(
@@ -430,10 +447,12 @@ async def memberTempBan(
     guild = interaction.guild
     if not duration:
         duration = 10
-    
+
     unban_time = datetime.now(datetime.timezone.utc) + timedelta(days=duration)
 
-    reason_with_time = f"Temporarily banned (unban at {unban_time.strftime('%H:%M:%S %Z')})"
+    reason_with_time = (
+        f"Temporarily banned (unban at {unban_time.strftime('%H:%M:%S %Z')})"
+    )
     if reason:
         reason_with_time += f": {reason}"
     await user.ban(reason=reason_with_time)
@@ -441,8 +460,8 @@ async def memberTempBan(
     await schedule_unban_task(user, guild, unban_time)
 
     await interaction.response.send_message(
-            f"Temporarily banned {user.name}#{user.discriminator} for {duration} day(s)."
-        )
+        f"Temporarily banned {user.name}#{user.discriminator} for {duration} day(s)."
+    )
 
     await guild.ban(
         user, duration, delete_message_days=delete_message_days, reason=reason
@@ -452,16 +471,16 @@ async def memberTempBan(
 
 @bot.slash_command(
     name="unban",
-    description="unban a person from server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Unban a person from server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_permissions(manage_messages=True)
 async def memberUnban(
     interaction: discord.Interaction,
-    user: str = discord.SlashOption("unban", "unban a user from server"),
+    user: str = discord.SlashOption("unban", "Unban a user from server"),
     reason: str = discord.SlashOption(
-        "reason", "provide a reason to unban the selected user"
+        "reason", "Provide a reason to unban the selected user"
     ),
 ):
     await interaction.guild.unban(discord.Object(id=user), reason=reason)
@@ -470,21 +489,21 @@ async def memberUnban(
 
 @bot.slash_command(
     name="timeout",
-    description="timeout a person in server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Timeout a person in server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_permissions(manage_messages=True)
 async def memberMute(
     interaction: discord.Interaction,
     timeout: int = discord.SlashOption(
-        "timeout", "provide an amount of time to mute in minutes"
+        "timeout", "Provide an amount of time to mute in minutes"
     ),
     user: discord.Member = discord.SlashOption(
-        "user", "timeout a user in minutes in server"
+        "user", "Timeout a user in minutes in server"
     ),
     reason: str = discord.SlashOption(
-        "reason", "provide a reason to timeout the selected user"
+        "reason", "Provide a reason to timeout the selected user"
     ),
 ):
     delta = timedelta(minutes=timeout)
@@ -494,18 +513,18 @@ async def memberMute(
 
 @bot.slash_command(
     name="nickname",
-    description="nickname a person in server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Nickname a person in server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_permissions(manage_nicknames=True)
 async def changeNick(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
-        "user", "select a user to change nickname in server"
+        "user", "Select a user to change nickname in server"
     ),
     nickname: str = discord.SlashOption(
-        "nickname", "enter a new nickname for the selected user"
+        "nickname", "Enter a new nickname for the selected user"
     ),
 ):
     await user.edit(nick=nickname)
@@ -515,17 +534,17 @@ async def changeNick(
 @bot.slash_command(
     name="roles",
     description="Manage roles of a person in server",
-    guild_ids=[TESTING_GUILD_ID],
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
 @application_checks.has_guild_permissions(manage_roles=True)
 async def manageRoles(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
-        "user", "select a user to manage their roles in server"
+        "user", "Select a user to manage their roles in server"
     ),
     manage_roles: discord.Role = discord.SlashOption(
-        "roles", "manage roles for the selected user"
+        "roles", "Manage roles for the selected user"
     ),
 ):
     await user.edit(roles=[manage_roles])
@@ -534,18 +553,18 @@ async def manageRoles(
 
 @bot.slash_command(
     name="drag",
-    description="drag a person to a voice channel in server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Drag a person to a voice channel in server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_guild_permissions(administrator=True)
 @application_checks.has_guild_permissions(move_members=True)
 async def voiceDrag(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
-        "user", "select a user to drag to a voice channel"
+        "user", "Select a user to drag to a voice channel"
     ),
     change_vc: discord.VoiceChannel = discord.SlashOption(
-        "drag", "change VC for the selected user"
+        "drag", "Change VC for the selected user"
     ),
 ):
     await user.move_to(change_vc)
@@ -554,16 +573,16 @@ async def voiceDrag(
 
 @bot.slash_command(
     name="create_text",
-    description="create a text channel in the server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Create a text channel in the server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 async def createText(
     interaction: discord.Interaction,
-    create_text: str = discord.SlashOption("name", "give a name for the VC"),
+    create_text: str = discord.SlashOption("name", "Give a name for the Text Channel"),
 ):
     query = {"_id": interaction.user.id}
     user = collection.find_one(query)
-    currency = user.get("currency", 0)
+    currency = user.get("currency", 0) if user else 0
     guild = interaction.guild
     if currency >= 10:
         collection.update_one(query, {"$set": {"currency": currency - 10}})
@@ -581,8 +600,8 @@ async def createText(
 
 @bot.slash_command(
     name="help",
-    description="shows a list of all slash commands in the server",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Shows a list of all slash commands in the server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_guild_permissions(administrator=True)
 async def help(interaction: discord.Interaction):
@@ -630,10 +649,11 @@ async def help(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-def delete_songs():
-    for file in os.listdir():
+# Music functions
+def delete_songs(temp_dir):
+    for file in os.listdir(temp_dir):
         if file.endswith(".mp3"):
-            os.remove(file)
+            os.remove(os.path.join(temp_dir, file))
 
 
 def get_youtube_url(search_term, result_index=0):
@@ -644,7 +664,7 @@ def get_youtube_url(search_term, result_index=0):
         return None
 
 
-async def play_queue(ctx):
+async def play_queue(ctx, temp_dir):
     global music_queue
     global disconnect_now
     while music_queue:
@@ -652,13 +672,13 @@ async def play_queue(ctx):
 
         try:
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                song_info = ydl.extract_info(url, download=True)
-            filename = song_info["title"] + " [" + song_info["id"] + "].mp3"
-            source = await discord.FFmpegOpusAudio.from_probe(
-                "next_url", **ffmpeg_options
-            )
+                ydl.download([url])
+            files = os.listdir(temp_dir)
+            audio_file = next(file for file in files if file.endswith(".mp3"))
+            file_path = os.path.join(temp_dir, audio_file)
+            source = discord.FFmpegPCMAudio(file_path, **ffmpeg_options)
 
-            ctx.voice_client.play(discord.FFmpegPCMAudio(filename, **ffmpeg_options))
+            ctx.voice_client.play(source)
             while ctx.guild.voice_client.is_connected():
                 if disconnect_now:
                     disconnect_now = False
@@ -672,6 +692,7 @@ async def play_queue(ctx):
         await ctx.voice_client.disconnect()
         music_queue = deque()
 
+# Music bot commands
 
 @bot.command(name="play", aliases=["connect", "join", "next", "add", "p"])
 async def streamx(ctx, url):
@@ -693,13 +714,9 @@ async def streamx(ctx, url):
         await voiceChannel.connect()
         await ctx.send(f"Playing on channel {ctx.message.author.voice.channel}")
 
-        try:
-            await play_queue(ctx)
-        except Exception as e:
-            print(f"Error during playback: {e}")
-            await ctx.send(
-                "An error occurred while playing music. Please try again later."
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            ydl_opts["outtmpl"] = os.path.join(temp_dir, "%(id)s.%(ext)s")
+            await play_queue(ctx, temp_dir)
 
 
 @bot.command(name="resume", aliases=["r"])
@@ -729,7 +746,8 @@ async def disconnect(ctx):
     disconnect_now = True
     await asyncio.sleep(2)
 
-    delete_songs()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        delete_songs(temp_dir)
 
     await ctx.send("Player disconnected.")
 
@@ -748,4 +766,4 @@ async def skip(ctx):
     await ctx.send("Song skipped.")
 
 
-bot.run(CONFIG["auth_token"])
+bot.run(config.get("BOT", "auth_token"))
