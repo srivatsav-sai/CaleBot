@@ -174,7 +174,7 @@ async def on_message(message):
     print(message.author, message.channel.name, message.content, message.embeds)
 
     if message.author.id != bot.application_id:
-        await log_event("Message sent", message.author, message.content)
+        await log_event(f"Message sent in {message.channel.name}", message.author, message.content)
 
     # anti-link system
 
@@ -267,14 +267,15 @@ async def on_message(message):
 @bot.event
 async def on_message_delete(message):
     if message.author.id != bot.application_id:
-        await log_event("Message Deleted", message.author, message.content)
+        await log_event(f"Message Deleted from {message.channel.name}", message.author, message.content)
 
 
 @bot.event
 async def on_message_edit(before, after):
     if before.author.id != bot.application_id and after.author.id != bot.application_id:
+        channel_name = before.channel.name
         await log_event(
-            "Message Edited",
+            f"Message Edited in {channel_name}",
             before.author,
             f"**Before:** {before.content}\n**After:** {after.content}",
         )
@@ -309,7 +310,7 @@ async def on_voice_state_update(member, before, after):
                 if join_time:
                     delta = datetime.now(timezone.utc) - join_time
                     del member_voice_times[(member, channel_id)]
-                    log_message = f"{member.name} (ID: {member.id}) stayed in {channel_name} for {delta.seconds} seconds."
+                    log_message = f"{member.mention} (ID: {member.id}) stayed in {channel_name} for {delta.seconds} seconds."
                     await log_event(
                         "Voice Channel Left (Duration)", member, log_message
                     )
@@ -317,11 +318,11 @@ async def on_voice_state_update(member, before, after):
 
 @bot.event
 async def on_member_update(before, after):
-    if before.author.id != bot.application_id and after.author.id != bot.application_id:
+    if before.id != bot.application_id and after.id != bot.application_id:
         if before.roles != after.roles:
             added_roles = [role for role in after.roles if role not in before.roles]
             removed_roles = [role for role in before.roles if role not in after.roles]
-            log_message = f"Member Role Update: {after.name} (ID: {after.id})\n"
+            log_message = f"Member Role Update: {after.mention} (ID: {after.id})\n"
             if added_roles:
                 log_message += (
                     f"Added Roles: {', '.join(role.name for role in added_roles)}\n"
@@ -382,7 +383,7 @@ async def getLevels(interaction: discord.Interaction):
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
+@application_checks.has_permissions(kick_members=True)
 async def memberKick(
     interaction: discord.Interaction,
     user: discord.User = discord.SlashOption("kick", "Kick a user from server"),
@@ -400,7 +401,7 @@ async def memberKick(
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
+@application_checks.has_permissions(ban_members=True)
 async def memberBan(
     interaction: discord.Interaction,
     user: discord.User = discord.SlashOption("ban", "Ban a user from server"),
@@ -423,7 +424,7 @@ async def memberBan(
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
+@application_checks.has_permissions(ban_members=True)
 async def memberTempBan(
     interaction: discord.Interaction,
     user: discord.User = discord.SlashOption("ban", "ban a user from server"),
@@ -471,7 +472,7 @@ async def memberTempBan(
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
+@application_checks.has_permissions(ban_members=True)
 async def memberUnban(
     interaction: discord.Interaction,
     user: str = discord.SlashOption("unban", "Unban a user from server"),
@@ -489,7 +490,7 @@ async def memberUnban(
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
+@application_checks.has_permissions(mute_members=True)
 async def memberMute(
     interaction: discord.Interaction,
     timeout: int = discord.SlashOption(
@@ -545,6 +546,27 @@ async def manageRoles(
 ):
     await user.edit(roles=[manage_roles])
     await interaction.send(f"Roles have been updated for {user}", ephemeral=True)
+
+@bot.slash_command(
+    name="find_vc",
+    description="Find in which VC a user is in.",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+async def findInVc(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "Select a user to find for in a VC"
+    ),
+):
+
+    guild = interaction.guild
+
+    for voice_channel in guild.voice_channels:
+        for member in voice_channel.members:
+            if member == user:
+                await interaction.response.send_message(f"Found {user.name} in voice channel: {voice_channel.name}", ephemeral=True)
+                return
+    await interaction.response.send_message(f"{user.name} is not currently in a voice channel.", ephemeral=True)
 
 
 @bot.slash_command(
@@ -604,15 +626,17 @@ async def help(interaction: discord.Interaction):
     embed = discord.Embed(title="My Commands")
 
     ban_desc = "To ban a user from the server."
+    tempBan_desc = "To ban a user temporarily from the server."
     unban_desc = "To unban a user from the server."
     kick_desc = "To kick a user from the server."
     timeout_desc = "To timeout/mute a user in the server."
     nick_desc = "To change nickname of a user in the server."
     roles_desc = "To change roles of a user in the server."
     drag_desc = "To drag a user between VCs in the server."
+    findVc_desc = "To find which VC a user is in."
     currency_desc = "To show how much currency you have."
     level_desc = "To show how many levels you have gained."
-    text_desc = "To create a text channel using 10 currency."
+    createText_desc = "To create a text channel using 10 currency."
     play_desc = "To play/add songs into the music bot."
     pause_desc = "To pause music using the music bot."
     resume_desc = "To resume music using the music bot."
@@ -620,15 +644,17 @@ async def help(interaction: discord.Interaction):
     disconnect_desc = "To disconnect the music bot."
 
     embed.add_field(name="`/ban`", value=ban_desc, inline=False)
+    embed.add_field(name="`/temp_ban`", value=tempBan_desc, inline=False)
     embed.add_field(name="`/unban`", value=unban_desc, inline=False)
     embed.add_field(name="`/kick`", value=kick_desc, inline=False)
     embed.add_field(name="`/timeout`", value=timeout_desc, inline=False)
     embed.add_field(name="`/nickname`", value=nick_desc, inline=False)
     embed.add_field(name="`/roles`", value=roles_desc, inline=False)
     embed.add_field(name="`/drag`", value=drag_desc, inline=False)
+    embed.add_field(name="`/find_vc`", value=findVc_desc, inline=False)
     embed.add_field(name="`/get_currency`", value=currency_desc, inline=False)
     embed.add_field(name="`/get_level`", value=level_desc, inline=False)
-    embed.add_field(name="`/create_text`", value=text_desc, inline=False)
+    embed.add_field(name="`/create_text`", value=createText_desc, inline=False)
     embed.add_field(
         name="`c.play or c.p or c.add or c.next or c.connect or c.join`",
         value=play_desc,
