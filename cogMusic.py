@@ -40,15 +40,16 @@ ydl_opts = {
 }
 
 
-
 @bot.event
 async def on_ready():
     print(f"{bot.user} has logged in")
+
 
 def delete_songs():
     for file in os.listdir():
         if file.endswith(".mp3"):
             os.remove(file)
+
 
 def get_youtube_url(search_term, result_index=0):
     results = Search(search_term).results
@@ -56,6 +57,7 @@ def get_youtube_url(search_term, result_index=0):
         return results[result_index].watch_url
     else:
         return None
+
 
 async def play_queue(ctx):
     global music_queue
@@ -72,9 +74,7 @@ async def play_queue(ctx):
                 "next_url", **ffmpeg_options
             )
 
-            ctx.voice_client.play(
-                discord.FFmpegPCMAudio(filename, **ffmpeg_options)
-            )
+            ctx.voice_client.play(discord.FFmpegPCMAudio(filename, **ffmpeg_options))
             while ctx.guild.voice_client.is_connected():
 
                 if disconnect_now:
@@ -84,20 +84,20 @@ async def play_queue(ctx):
 
         except Exception as e:
             print(f"Error playing song: {e}")
-            await ctx.send(
-                f"An error occurred while playing {url}. Skipping..."
-            )
+            await ctx.send(f"An error occurred while playing {url}. Skipping...")
 
     if not music_queue:
         await ctx.voice_client.disconnect()
 
         music_queue = deque()
 
+
 @bot.event
 async def on_ready():
     print(f"We have logged in as {bot.user}")
 
-@bot.command(name="play", aliases=["connect", "join", "next", "add"])
+
+@bot.command(name="play", aliases=["connect", "join", "next", "add", "p"])
 async def streamx(ctx, url):
     global music_queue
     if "youtu" not in url:
@@ -115,9 +115,7 @@ async def streamx(ctx, url):
         pass
     else:
         await voiceChannel.connect()
-        await ctx.send(
-            f"Playing on channel {ctx.message.author.voice.channel}"
-        )
+        await ctx.send(f"Playing on channel {ctx.message.author.voice.channel}")
 
         try:
             await play_queue(ctx)
@@ -127,7 +125,8 @@ async def streamx(ctx, url):
                 "An error occurred while playing music. Please try again later."
             )
 
-@bot.command(name="resume")
+
+@bot.command(name="resume", aliases=["r"])
 async def resume(ctx):
 
     if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
@@ -138,12 +137,14 @@ async def resume(ctx):
             "Not connected to a voice channel or no song was previously playing."
         )
 
+
 @bot.command(name="pause")
 async def pause(ctx):
 
     ctx.voice_client.pause()
 
     await ctx.send("Playback paused.")
+
 
 @bot.command(name="disconnect", aliases=["dc", "boot", "stop"])
 async def disconnect(ctx):
@@ -159,6 +160,7 @@ async def disconnect(ctx):
 
     await ctx.send("Player disconnected.")
 
+
 @bot.command(name="skip")
 async def skip(ctx):
     global disconnect_now
@@ -172,6 +174,7 @@ async def skip(ctx):
 
     await ctx.send("Song skipped.")
 
-def runbot():
 
-    bot.run(CONFIG["auth_token"])
+# def runbot():
+
+bot.run(CONFIG["auth_token"])

@@ -18,33 +18,30 @@ intents.messages = True
 
 bot = discord.Client(intents=intents)
 
-# class HandleMod(commands.Cog):
-#     def __init__(self, client):
-#         self.client = client
-if __name__ == "__main__":
 
-    @bot.event
-    async def on_ready():
-        print(f"We have logged in as {bot.user}")
+@bot.event
+async def on_ready():
+    print(f"We have logged in as {bot.user}")
 
-    @bot.slash_command(
-        name="modmail",
-        description="mail a ticket for complaint/support",
-        guild_ids=[TESTING_GUILD_ID],
+
+@bot.slash_command(
+    name="modmail",
+    description="mail a ticket for complaint/support",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_channels=True)
+async def create_text_channel(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "provide your username in server"
+    ),
+    text_channel: str = discord.SlashOption("modmail", "create a text channel"),
+):
+    await create_text_channel(create_text_channel=text_channel)
+    await interaction.send(
+        f"{user} has created a {text_channel} for modmail support.", ephemeral=True
     )
-    @commands.has_permissions(administrator=True)
-    @application_checks.has_permissions(manage_channels=True)
-    async def create_text_channel(
-        
-        interaction: discord.Interaction,
-        user: discord.Member = discord.SlashOption(
-            "user", "provide your username in server"
-        ),
-        text_channel: str = discord.SlashOption(
-            "modmail", "create a text channel"
-        ),
-    ):
-        await create_text_channel(create_text_channel=text_channel)
-        await interaction.send(f"{user} has created a {text_channel} for modmail support.", ephemeral=True)
 
-    bot.run(CONFIG["auth_token"])
+
+bot.run(CONFIG["auth_token"])

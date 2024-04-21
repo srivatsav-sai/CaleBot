@@ -26,6 +26,7 @@ bot = discord.Client(intents=intents)
 cluster = MongoClient("mongodb://localhost:27017/")
 db = cluster["bottesting1"]
 collection = db["discordserver"]
+banlist = db["banlist"]
 
 member_voice_times = {}
 message_cooldowns = {}
@@ -35,7 +36,7 @@ TARGETING_VOICE_CHANNELS = [
     748394748099821652,
     1098631003381170217,
     1222575664364916768,
-    1222575796686950480
+    1222575796686950480,
 ]
 
 LINK_REGEX = r"(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})"
@@ -46,12 +47,14 @@ AUDIT_LOG_CHANNEL = 1222575735332409495
 ALLOWED_LINK_DOMAINS = ["youtube.com"]
 ALLOWED_LINK_CHANNELS = []
 
+
 async def log_message(message):
 
     if AUDIT_LOG_CHANNEL:
         audit_channel = bot.get_channel(AUDIT_LOG_CHANNEL)
         if audit_channel:
             await audit_channel.send(message)
+
 
 async def log_event(event_type, user, content):
     log_channel = bot.get_channel(AUDIT_LOG_CHANNEL)
@@ -63,18 +66,23 @@ async def log_event(event_type, user, content):
         embed.set_footer(text=f"User ID: {user.id}")
         await log_channel.send(embed=embed)
 
+
 def strip_url(url):
     url = re.sub(r"^(?:https?|ftp)://", "", url)
     url = re.sub(r"/.*$", "", url)
     return url
 
+
 @bot.event
 async def on_ready():
     print(f"{bot.user} has logged in")
     # guild_obj = bot.get_guild(TESTING_GUILD_ID)
-    # bans = guild_obj.bans()
-    # for _ in bans:
-    #     print(_)
+    # bans = await guild_obj.bans().flatten()
+    # print(bans)
+    # for ban in bans:
+    #     post = {"_id": bans.user.id, "name": bans.user.name}
+    #     banlist.insert_one(post)
+
 
 async def check_level_up(channel, message, collection):
     query = {"_id": message.author.id}
@@ -99,17 +107,16 @@ async def check_level_up(channel, message, collection):
             f"Congratulations, {log_message}! You now have {currency} unit{'s' if  currency > 1 else ''} currency!"
         )
 
+
 @bot.event
 async def on_message(message):
 
     if message.author == bot.user:
         return
     print(message.author, message.channel.name, message.content, message.embeds)
-    
+
     if message.author.id != bot.application_id:
-        await log_event(
-            "Message sent", message.author, message.content
-        )
+        await log_event("Message sent", message.author, message.content)
 
     # anti-link system
     matches = re.findall(LINK_REGEX, message.content, re.IGNORECASE)
@@ -176,12 +183,13 @@ async def on_message(message):
             query = {"_id": message.author.id}
             user = collection.find(query)
             for result in user:
-                score = result["score"]
-            score = score + 1
+                old_score = result["score"]
+                old_currency = result["currency"]
+            score = old_score + 1
             level = score // 100
-            currency = currency + 1
+            currency = old_currency + 1
             collection.update_one(
-                {"_id": message.author.id},
+                query,
                 {
                     "$set": {
                         "score": score,
@@ -192,192 +200,22 @@ async def on_message(message):
             )
     await check_level_up(message.channel, message, collection)
 
+
 @bot.event
 async def on_message_delete(message):
     if message.author.id != bot.application_id:
-        await log_event(
-            "Message Deleted", message.author, message.content
-        )
+        await log_event("Message Deleted", message.author, message.content)
+
 
 @bot.event
 async def on_message_edit(before, after):
-    if (
-        before.author.id != bot.application_id
-        and after.author.id != bot.application_id
-    ):
+    if before.author.id != bot.application_id and after.author.id != bot.application_id:
         await log_event(
             "Message Edited",
             before.author,
             f"**Before:** {before.content}\n**After:** {after.content}",
         )
 
-@bot.slash_command(
-    name="get_currency",
-    description="get currency",
-    guild_ids=[TESTING_GUILD_ID],
-)
-async def getCurrency(
-    
-    interaction: discord.Interaction
-):
-    query = {"_id": interaction.user.id}
-    user = collection.find_one(query)
-    currency = user.get("currency", 0)
-
-    await interaction.send(f"You have {currency} currency", ephemeral=True)
-
-@bot.slash_command(
-    description="hello", guild_ids=[TESTING_GUILD_ID]
-)
-async def hello(interaction: discord.Interaction):
-    await interaction.send("Hello!")
-
-@bot.slash_command(
-    name="kick",
-    description="kick a person from server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
-async def memberKick(
-    
-    interaction: discord.Interaction,
-    user: discord.User = discord.SlashOption("kick", "kick a user from server"),
-    reason: str = discord.SlashOption(
-        "reason", "provide a reason to kick the selected user"
-    ),
-):
-    await interaction.guild.kick(user, reason=reason)
-    await interaction.send(f"{user} has been kicked", ephemeral=True)
-
-@bot.slash_command(
-    name="ban",
-    description="ban a person from server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
-async def memberBan(
-    
-    interaction: discord.Interaction,
-    user: discord.User = discord.SlashOption("ban", "ban a user from server"),
-    delete_message_days: discord.User = discord.SlashOption(
-        "delete_message_days", "delete this user's previous messages upto"
-    ),
-    reason: str = discord.SlashOption(
-        "reason", "provide a reason to ban the selected user"
-    ),
-):
-    await interaction.guild.ban(
-        user, delete_message_days=delete_message_days, reason=reason
-    )
-    await interaction.send(f"{user} has been banned", ephemeral=True)
-
-@bot.slash_command(
-    name="unban",
-    description="unban a person from server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
-async def memberUnban(
-    
-    interaction: discord.Interaction,
-    user: str = discord.SlashOption("unban", "unban a user from server"),
-    reason: str = discord.SlashOption(
-        "reason", "provide a reason to unban the selected user"
-    ),
-):
-    await interaction.guild.unban(discord.User(id=user), reason=reason)
-    await interaction.send(f"{user} has been unbanned", ephemeral=True)
-
-@bot.slash_command(
-    name="timeout",
-    description="timeout a person in server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_messages=True)
-async def memberMute(
-    
-    interaction: discord.Interaction,
-    timeout: int = discord.SlashOption(
-        "timeout", "provide an amount of time to mute in minutes"
-    ),
-    user: discord.Member = discord.SlashOption(
-        "user", "timeout a user in minutes in server"
-    ),
-    reason: str = discord.SlashOption(
-        "reason", "provide a reason to timeout the selected user"
-    ),
-):
-    delta = timedelta(minutes=timeout)
-    await user.timeout(timeout=delta, reason=reason)
-    await interaction.send(f"{user} has been muted", ephemeral=True)
-
-@bot.slash_command(
-    name="nickname",
-    description="nickname a person in server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_nicknames=True)
-async def changeNick(
-    
-    interaction: discord.Interaction,
-    user: discord.Member = discord.SlashOption(
-        "user", "select a user to change nickname in server"
-    ),
-    nickname: str = discord.SlashOption(
-        "nickname", "enter a new nickname for the selected user"
-    ),
-):
-    await user.edit(nick=nickname)
-    await interaction.send(
-        f"Nickname of {user} has been changed.", ephemeral=True
-    )
-
-@bot.slash_command(
-    name="roles",
-    description="nickname a person in server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_permissions(administrator=True)
-@application_checks.has_guild_permissions(manage_roles=True)
-async def manageRoles(
-    
-    interaction: discord.Interaction,
-    user: discord.Member = discord.SlashOption(
-        "user", "select a user to  their manage roles in server"
-    ),
-    manage_roles: discord.Role = discord.SlashOption(
-        "roles", "manage roles for the selected user"
-    ),
-):
-    await user.edit(roles=[manage_roles])
-    await interaction.send(f"Roles have been updated to {user}", ephemeral=True)
-
-@bot.slash_command(
-    name="drag",
-    description="drag a person in a vc in server",
-    guild_ids=[TESTING_GUILD_ID],
-)
-@commands.has_guild_permissions(administrator=True)
-@application_checks.has_guild_permissions(move_members=True)
-async def voiceDrag(
-    
-    interaction: discord.Interaction,
-    user: discord.Member = discord.SlashOption(
-        "user", "select a user to  their manage roles in server"
-    ),
-    change_vc: discord.VoiceChannel = discord.SlashOption(
-        "drag", "change VC for the selected user"
-    ),
-):
-    await user.move_to(change_vc)
-    await interaction.send(
-        f"{user} has been dragged to {change_vc}", ephemeral=True
-    )
 
 @bot.event
 async def on_voice_state_update(member, before, after):
@@ -396,17 +234,11 @@ async def on_voice_state_update(member, before, after):
             and after.channel is None
         ):
 
-            channel_id = (
-                after.channel.id if after.channel else before.channel.id
-            )
-            channel_name = (
-                after.channel.name if after.channel else before.channel.name
-            )
+            channel_id = after.channel.id if after.channel else before.channel.id
+            channel_name = after.channel.name if after.channel else before.channel.name
 
             if before.channel is None:
-                member_voice_times[(member, channel_id)] = datetime.now(
-                    timezone.utc
-                )
+                member_voice_times[(member, channel_id)] = datetime.now(timezone.utc)
                 await log_event(
                     "Voice Channel Joined",
                     member,
@@ -422,28 +254,26 @@ async def on_voice_state_update(member, before, after):
                         "Voice Channel Left (Duration)", member, log_message
                     )
 
+
+@bot.event
 async def on_member_update(before, after):
 
-    if (
-        before.author.id != bot.application_id
-        and after.author.id != bot.application_id
-    ):
+    if before.author.id != bot.application_id and after.author.id != bot.application_id:
 
         if before.roles != after.roles:
-            added_roles = [
-                role for role in after.roles if role not in before.roles
-            ]
-            removed_roles = [
-                role for role in before.roles if role not in after.roles
-            ]
+            added_roles = [role for role in after.roles if role not in before.roles]
+            removed_roles = [role for role in before.roles if role not in after.roles]
             log_message = f"Member Role Update: {after.name} (ID: {after.id})\n"
             if added_roles:
-                log_message += f"Added Roles: {', '.join(role.name for role in added_roles)}\n"
+                log_message += (
+                    f"Added Roles: {', '.join(role.name for role in added_roles)}\n"
+                )
             if removed_roles:
-                log_message += f"Removed Roles: {', '.join(role.name for role in removed_roles)}\n"
-            await log_event(
-                "Member Updated", before, f"{log_message}"
-            )
+                log_message += (
+                    f"Removed Roles: {', '.join(role.name for role in removed_roles)}\n"
+                )
+            await log_event("Member Updated", before, f"{log_message}")
+
 
 @bot.event
 async def on_reaction_add(reaction, user):
@@ -459,5 +289,254 @@ async def on_reaction_add(reaction, user):
         log_message += f"Message: {message.content}\n"
         log_message += f"Reaction: {emoji}"
         await log_event("Reaction Added", user, f"{log_message}")
+
+
+@bot.slash_command(
+    name="get_currency",
+    description="To show how much currency you have",
+    guild_ids=[TESTING_GUILD_ID],
+)
+async def getCurrency(interaction: discord.Interaction):
+    query = {"_id": interaction.user.id}
+    user = collection.find_one(query)
+    currency = user.get("currency", 0)
+
+    await interaction.send(f"You have {currency} currency", ephemeral=True)
+
+
+@bot.slash_command(
+    name="get_level",
+    description="To show how many levels you gained",
+    guild_ids=[TESTING_GUILD_ID],
+)
+async def getLevels(interaction: discord.Interaction):
+    query = {"_id": interaction.user.id}
+    user = collection.find_one(query)
+    level = user.get("level", 0)
+
+    await interaction.send(f"You have reached level {level}", ephemeral=True)
+
+
+@bot.slash_command(
+    name="kick",
+    description="kick a person from server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_messages=True)
+async def memberKick(
+    interaction: discord.Interaction,
+    user: discord.User = discord.SlashOption("kick", "kick a user from server"),
+    reason: str = discord.SlashOption(
+        "reason", "provide a reason to kick the selected user"
+    ),
+):
+    await interaction.guild.kick(user, reason=reason)
+    await interaction.send(f"{user} has been kicked", ephemeral=True)
+
+
+@bot.slash_command(
+    name="ban",
+    description="ban a person from server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_messages=True)
+async def memberBan(
+    interaction: discord.Interaction,
+    user: discord.User = discord.SlashOption("ban", "ban a user from server"),
+    delete_message_days: int = discord.SlashOption(
+        "delete_message_days", "delete this user's previous messages upto"
+    ),
+    reason: str = discord.SlashOption(
+        "reason", "provide a reason to ban the selected user"
+    ),
+):
+    await interaction.guild.ban(
+        user, delete_message_days=delete_message_days, reason=reason
+    )
+    await interaction.send(f"{user} has been banned", ephemeral=True)
+
+
+@bot.slash_command(
+    name="unban",
+    description="unban a person from server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_messages=True)
+async def memberUnban(
+    interaction: discord.Interaction,
+    user: str = discord.SlashOption("unban", "unban a user from server"),
+    reason: str = discord.SlashOption(
+        "reason", "provide a reason to unban the selected user"
+    ),
+):
+    await interaction.guild.unban(discord.User(id=user), reason=reason)
+    await interaction.send(f"{user} has been unbanned", ephemeral=True)
+
+
+@bot.slash_command(
+    name="timeout",
+    description="timeout a person in server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_messages=True)
+async def memberMute(
+    interaction: discord.Interaction,
+    timeout: int = discord.SlashOption(
+        "timeout", "provide an amount of time to mute in minutes"
+    ),
+    user: discord.Member = discord.SlashOption(
+        "user", "timeout a user in minutes in server"
+    ),
+    reason: str = discord.SlashOption(
+        "reason", "provide a reason to timeout the selected user"
+    ),
+):
+    delta = timedelta(minutes=timeout)
+    await user.timeout(timeout=delta, reason=reason)
+    await interaction.send(f"{user} has been muted", ephemeral=True)
+
+
+@bot.slash_command(
+    name="nickname",
+    description="nickname a person in server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_nicknames=True)
+async def changeNick(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "select a user to change nickname in server"
+    ),
+    nickname: str = discord.SlashOption(
+        "nickname", "enter a new nickname for the selected user"
+    ),
+):
+    await user.edit(nick=nickname)
+    await interaction.send(f"Nickname of {user} has been changed.", ephemeral=True)
+
+
+@bot.slash_command(
+    name="roles",
+    description="nickname a person in server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_guild_permissions(manage_roles=True)
+async def manageRoles(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "select a user to  their manage roles in server"
+    ),
+    manage_roles: discord.Role = discord.SlashOption(
+        "roles", "manage roles for the selected user"
+    ),
+):
+    await user.edit(roles=[manage_roles])
+    await interaction.send(f"Roles have been updated to {user}", ephemeral=True)
+
+
+@bot.slash_command(
+    name="drag",
+    description="drag a person in a vc in server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(move_members=True)
+async def voiceDrag(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "select a user to  their manage roles in server"
+    ),
+    change_vc: discord.VoiceChannel = discord.SlashOption(
+        "drag", "change VC for the selected user"
+    ),
+):
+    await user.move_to(change_vc)
+    await interaction.send(f"{user} has been dragged to {change_vc}", ephemeral=True)
+
+
+@bot.slash_command(
+    name="create_text",
+    description="create a text channel in the server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+async def createText(
+    interaction: discord.Interaction,
+    create_text: str = discord.SlashOption("name", "give a name for the VC"),
+):
+    query = {"_id": interaction.user.id}
+    user = collection.find_one(query)
+    currency = user.get("currency", 0)
+    guild = interaction.guild
+    if currency >= 10:
+        collection.update_one(query, {"$set": {"currency": currency - 10}})
+
+        text_channel = await guild.create_text_channel(create_text)
+
+        await interaction.response.send_message(
+            f"{text_channel.name} text channel has been created.", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"You do not have enough currency to create a text channel.", ephemeral=True
+        )
+
+
+@bot.slash_command(
+    name="help",
+    description="shows a list of all slash commands in the server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_guild_permissions(administrator=True)
+async def help(interaction: discord.Interaction):
+    embed = discord.Embed(title="My Commands")
+
+    ban_desc = "To ban a user from the server."
+    unban_desc = "To unban a user from the server."
+    kick_desc = "To kick a user from the server."
+    timeout_desc = "To timeout/mute a user in the server."
+    nick_desc = "To change nickname of a user in the server."
+    roles_desc = "To change roles of a user in the server."
+    drag_desc = "To drag a user between VCs in the server."
+    currency_desc = "To show how much currency you have."
+    level_desc = "To show how many levels you have gained."
+    text_desc = "To create a text channel using 10 currency."
+    play_desc = "To play/add songs into the music bot."
+    pause_desc = "To pause music using the music bot."
+    resume_desc = "To resume music using the music bot."
+    skip_desc = "To skip music using the music bot."
+    disconnect_desc = "To disconnect the music bot."
+
+    embed.add_field(name="`/ban`", value=ban_desc, inline=False)
+    embed.add_field(name="`/unban`", value=unban_desc, inline=False)
+    embed.add_field(name="`/kick`", value=kick_desc, inline=False)
+    embed.add_field(name="`/timeout`", value=timeout_desc, inline=False)
+    embed.add_field(name="`/nickname`", value=nick_desc, inline=False)
+    embed.add_field(name="`/roles`", value=roles_desc, inline=False)
+    embed.add_field(name="`/drag`", value=drag_desc, inline=False)
+    embed.add_field(name="`/get_currency`", value=currency_desc, inline=False)
+    embed.add_field(name="`/get_level`", value=level_desc, inline=False)
+    embed.add_field(name="`/create_text`", value=text_desc, inline=False)
+    embed.add_field(
+        name="`c.play or c.p or c.add or c.next or c.connect or c.join`",
+        value=play_desc,
+        inline=False,
+    )
+    embed.add_field(name="`c.pause`", value=pause_desc, inline=False)
+    embed.add_field(name="`c.resume or c.r`", value=resume_desc, inline=False)
+    embed.add_field(name="`c.skip`", value=skip_desc, inline=False)
+    embed.add_field(
+        name="`c.disconnect or c.dc or c.boot or c.stop`",
+        value=disconnect_desc,
+        inline=False,
+    )
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 bot.run(CONFIG["auth_token"])
