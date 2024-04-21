@@ -228,7 +228,7 @@ async def on_message(message):
     else:
         user_cooldowns[author] = [current_time]
 
-#Level and Currency System
+    # Level and Currency System
 
     myquery = {"_id": message.author.id}
     if collection.count_documents(myquery) == 0:
@@ -346,7 +346,9 @@ async def on_reaction_add(reaction, user):
         log_message += f"Reaction: {emoji}"
         await log_event("Reaction Added", user, f"{log_message}")
 
+
 # Slash commands
+
 
 @bot.slash_command(
     name="get_currency",
@@ -643,7 +645,10 @@ async def help(interaction: discord.Interaction):
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
+
 # Music functions
+
+
 def delete_songs(temp_dir):
     for file in os.listdir(temp_dir):
         if file.endswith(".mp3"):
@@ -686,7 +691,9 @@ async def play_queue(ctx, temp_dir):
         await ctx.voice_client.disconnect()
         music_queue = deque()
 
+
 # Music bot commands
+
 
 @bot.command(name="play", aliases=["connect", "join", "next", "add", "p"])
 async def streamx(ctx, url):
