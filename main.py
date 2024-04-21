@@ -1,10 +1,17 @@
 import nextcord as discord
 import time
 import re
+import asyncio
 from pymongo import MongoClient
 from nextcord.ext import application_checks
 from nextcord.ext import commands
 from datetime import datetime, timedelta, timezone
+from collections import deque
+import yt_dlp as youtube_dl
+import asyncio
+import os
+from collections import deque
+from pytube import Search
 
 from settings import CONFIG
 from settings import TESTING_GUILD_ID
@@ -21,7 +28,7 @@ intents.reactions = True
 intents.typing = True
 intents.messages = True
 
-bot = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="c.", intents=intents)
 
 cluster = MongoClient("mongodb://localhost:27017/")
 db = cluster["bottesting1"]
@@ -31,12 +38,29 @@ banlist = db["banlist"]
 member_voice_times = {}
 message_cooldowns = {}
 user_cooldowns = {}
+unban_tasks = asyncio.PriorityQueue()
+
+music_queue = deque()
+disconnect_now = False
+
+ffmpeg_options = {"options": "-vn"}
+ydl_opts = {
+    "format": "bestaudio",
+    "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+    "postprocessors": [
+        {
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        }
+    ],
+}
 
 TARGETING_VOICE_CHANNELS = [
     748394748099821652,
     1098631003381170217,
     1222575664364916768,
-    1222575796686950480
+    1222575796686950480,
 ]
 
 LINK_REGEX = r"(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})"
@@ -49,7 +73,6 @@ ALLOWED_LINK_CHANNELS = []
 
 
 async def log_message(message):
-
     if AUDIT_LOG_CHANNEL:
         audit_channel = bot.get_channel(AUDIT_LOG_CHANNEL)
         if audit_channel:
@@ -57,14 +80,15 @@ async def log_message(message):
 
 
 async def log_event(event_type, user, content):
-    log_channel = bot.get_channel(AUDIT_LOG_CHANNEL)
-    if log_channel:
-        embed = discord.Embed(title=event_type, description=content)
-        embed.set_author(
-            name=user.name, icon_url=user.avatar.url if user.avatar else ""
-        )
-        embed.set_footer(text=f"User ID: {user.id}")
-        await log_channel.send(embed=embed)
+    if AUDIT_LOG_CHANNEL:
+        log_channel = bot.get_channel(AUDIT_LOG_CHANNEL)
+        if log_channel:
+            embed = discord.Embed(title=event_type, description=content)
+            embed.set_author(
+                name=user.name, icon_url=user.avatar.url if user.avatar else ""
+            )
+            embed.set_footer(text=f"User ID: {user.id}")
+            await log_channel.send(embed=embed)
 
 
 def strip_url(url):
@@ -106,6 +130,28 @@ async def check_level_up(channel, message, collection):
         await channel.send(
             f"Congratulations, {log_message}! You now have {currency} unit{'s' if  currency > 1 else ''} currency!"
         )
+
+async def schedule_unban_task(user_to_unban: discord.Member, guild: discord.Guild, unban_time: datetime):
+
+    delta = unban_time - datetime.now(datetime.timezone.utc)
+    delay = max(delta.total_seconds(), 0)
+    task = (delay, user_to_unban, guild)
+
+    await unban_tasks.put(task)
+    print(f"User {user_to_unban} scheduled for unban at {unban_time}")
+
+async def background_unban_task():
+
+    while True:
+        delay, user_to_unban, guild = await unban_tasks.get()
+
+        if delay <= 0:
+            await user_to_unban.unban()
+            print(f"Unbanned user {user_to_unban} (scheduled task)")
+        else:
+            await unban_tasks.put((delay, user_to_unban, guild))
+
+        await asyncio.sleep(5)
 
 
 @bot.event
@@ -199,7 +245,7 @@ async def on_message(message):
                 },
             )
     await check_level_up(message.channel, message, collection)
-
+    await bot.process_commands(message)
 
 @bot.event
 async def on_message_delete(message):
@@ -222,7 +268,7 @@ async def on_voice_state_update(member, before, after):
 
     if member.id != bot.application_id:
 
-        target_voice_channel_ids = [TARGETING_VOICE_CHANNELS]
+        target_voice_channel_ids = TARGETING_VOICE_CHANNELS
 
         if (
             before.channel is None
@@ -359,6 +405,52 @@ async def memberBan(
 
 
 @bot.slash_command(
+    name="temp_ban",
+    description="temporarily ban a person from server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_permissions(manage_messages=True)
+async def memberTempBan(
+    interaction: discord.Interaction,
+    user: discord.User = discord.SlashOption("ban", "ban a user from server"),
+    duration: int = discord.SlashOption(
+        name="duration",
+        description="Ban duration in days (default: 10 days)",
+        required=False,
+    ),
+    delete_message_days: int = discord.SlashOption(
+        "delete_message_days", "delete this user's previous messages upto"
+    ),
+    reason: str = discord.SlashOption(
+        "reason", "provide a reason to ban the selected user"
+    ),
+):
+    author = interaction.user
+    guild = interaction.guild
+    if not duration:
+        duration = 10
+    
+    unban_time = datetime.now(datetime.timezone.utc) + timedelta(days=duration)
+
+    reason_with_time = f"Temporarily banned (unban at {unban_time.strftime('%H:%M:%S %Z')})"
+    if reason:
+        reason_with_time += f": {reason}"
+    await user.ban(reason=reason_with_time)
+
+    await schedule_unban_task(user, guild, unban_time)
+
+    await interaction.response.send_message(
+            f"Temporarily banned {user.name}#{user.discriminator} for {duration} day(s)."
+        )
+
+    await guild.ban(
+        user, duration, delete_message_days=delete_message_days, reason=reason
+    )
+    await interaction.send(f"{user} has been banned", ephemeral=True)
+
+
+@bot.slash_command(
     name="unban",
     description="unban a person from server",
     guild_ids=[TESTING_GUILD_ID],
@@ -372,7 +464,7 @@ async def memberUnban(
         "reason", "provide a reason to unban the selected user"
     ),
 ):
-    await interaction.guild.unban(discord.User(id=user), reason=reason)
+    await interaction.guild.unban(discord.Object(id=user), reason=reason)
     await interaction.send(f"{user} has been unbanned", ephemeral=True)
 
 
@@ -422,7 +514,7 @@ async def changeNick(
 
 @bot.slash_command(
     name="roles",
-    description="nickname a person in server",
+    description="Manage roles of a person in server",
     guild_ids=[TESTING_GUILD_ID],
 )
 @commands.has_permissions(administrator=True)
@@ -430,19 +522,19 @@ async def changeNick(
 async def manageRoles(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
-        "user", "select a user to  their manage roles in server"
+        "user", "select a user to manage their roles in server"
     ),
     manage_roles: discord.Role = discord.SlashOption(
         "roles", "manage roles for the selected user"
     ),
 ):
     await user.edit(roles=[manage_roles])
-    await interaction.send(f"Roles have been updated to {user}", ephemeral=True)
+    await interaction.send(f"Roles have been updated for {user}", ephemeral=True)
 
 
 @bot.slash_command(
     name="drag",
-    description="drag a person in a vc in server",
+    description="drag a person to a voice channel in server",
     guild_ids=[TESTING_GUILD_ID],
 )
 @commands.has_guild_permissions(administrator=True)
@@ -450,7 +542,7 @@ async def manageRoles(
 async def voiceDrag(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
-        "user", "select a user to  their manage roles in server"
+        "user", "select a user to drag to a voice channel"
     ),
     change_vc: discord.VoiceChannel = discord.SlashOption(
         "drag", "change VC for the selected user"
@@ -483,7 +575,7 @@ async def createText(
         )
     else:
         await interaction.response.send_message(
-            f"You do not have enough currency to create a text channel.", ephemeral=True
+            "You do not have enough currency to create a text channel.", ephemeral=True
         )
 
 
@@ -537,6 +629,123 @@ async def help(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+def delete_songs():
+    for file in os.listdir():
+        if file.endswith(".mp3"):
+            os.remove(file)
+
+
+def get_youtube_url(search_term, result_index=0):
+    results = Search(search_term).results
+    if results:
+        return results[result_index].watch_url
+    else:
+        return None
+
+
+async def play_queue(ctx):
+    global music_queue
+    global disconnect_now
+    while music_queue:
+        url = music_queue.popleft()
+
+        try:
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                song_info = ydl.extract_info(url, download=True)
+            filename = song_info["title"] + " [" + song_info["id"] + "].mp3"
+            source = await discord.FFmpegOpusAudio.from_probe(
+                "next_url", **ffmpeg_options
+            )
+
+            ctx.voice_client.play(discord.FFmpegPCMAudio(filename, **ffmpeg_options))
+            while ctx.guild.voice_client.is_connected():
+                if disconnect_now:
+                    disconnect_now = False
+                    break
+                await asyncio.sleep(1)
+        except Exception as e:
+            print(f"Error playing song: {e}")
+            await ctx.send(f"An error occurred while playing {url}. Skipping...")
+
+    if not music_queue:
+        await ctx.voice_client.disconnect()
+        music_queue = deque()
+
+
+@bot.command(name="play", aliases=["connect", "join", "next", "add", "p"])
+async def streamx(ctx, url):
+    global music_queue
+    if "youtu" not in url:
+        url = get_youtube_url(url)
+
+    music_queue.append(url)
+    await ctx.send("Song added to the queue.")
+
+    if not ctx.message.author.voice:
+        await ctx.send("You need to be in a voice channel to play music.")
+        return
+    voiceChannel = ctx.message.author.voice.channel
+
+    if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
+        pass
+    else:
+        await voiceChannel.connect()
+        await ctx.send(f"Playing on channel {ctx.message.author.voice.channel}")
+
+        try:
+            await play_queue(ctx)
+        except Exception as e:
+            print(f"Error during playback: {e}")
+            await ctx.send(
+                "An error occurred while playing music. Please try again later."
+            )
+
+
+@bot.command(name="resume", aliases=["r"])
+async def resume(ctx):
+    if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
+        ctx.voice_client.resume()
+        await ctx.send("Playback resumed.")
+    else:
+        await ctx.send(
+            "Not connected to a voice channel or no song was previously playing."
+        )
+
+
+@bot.command(name="pause")
+async def pause(ctx):
+    ctx.voice_client.pause()
+    await ctx.send("Playback paused.")
+
+
+@bot.command(name="disconnect", aliases=["dc", "boot", "stop"])
+async def disconnect(ctx):
+    global music_queue
+    global disconnect_now
+
+    music_queue = deque()
+
+    disconnect_now = True
+    await asyncio.sleep(2)
+
+    delete_songs()
+
+    await ctx.send("Player disconnected.")
+
+
+@bot.command(name="skip")
+async def skip(ctx):
+    global disconnect_now
+
+    ctx.voice_client.stop()
+
+    disconnect_now = True
+    await asyncio.sleep(2)
+
+    ctx.voice_client.resume()
+
+    await ctx.send("Song skipped.")
 
 
 bot.run(CONFIG["auth_token"])
