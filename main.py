@@ -20,6 +20,7 @@ intents.message_content = True
 intents.voice_states = True
 intents.emojis = True
 intents.moderation = True
+intents.dm_messages = True
 intents.reactions = True
 intents.typing = True
 intents.messages = True
@@ -552,6 +553,28 @@ async def manageRoles(
     await user.edit(roles=[manage_roles])
     await interaction.send(f"Roles have been updated for {user}", ephemeral=True)
 
+@bot.slash_command(
+    name="ping",
+    description="Pings a role in the server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_guild_permissions(manage_roles=True)
+async def pingRole(
+    interaction: discord.Interaction,
+    role: discord.Role = discord.SlashOption(
+        "role", "Select a role to ping"
+    ),
+    message: str = discord.SlashOption(
+        "message", "Optional message to be included"
+    ),
+):
+    ping_message = f"<@&{role.id}>"
+    if message:
+        ping_message += f"{message}"
+
+    await interaction.response.send_message(ping_message)
+
 
 @bot.slash_command(
     name="find_vc",
@@ -601,8 +624,31 @@ async def voiceDrag(
 
 
 @bot.slash_command(
+    name="mod_mail",
+    description="File a ticket to moderators for support.",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+async def modMail(
+    interaction: discord.Interaction,
+    create_text: str = discord.SlashOption("name", "Give a name for the Text Channel"),
+    role: discord.Role = discord.SlashOption(
+        "category", "Select a category of support"
+    ),
+):
+    
+    guild = interaction.guild
+    category = f"<@&{role.id}>"
+    text_channel = await guild.create_text_channel(create_text)
+
+    await interaction.response.send_message(
+        f"{text_channel.name} text channel has been created for {category} category of support."
+    )
+
+
+
+@bot.slash_command(
     name="create_text",
-    description="Create a text channel in the server",
+    description="Create a text channel in the server.",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 async def createText(
@@ -624,7 +670,7 @@ async def createText(
     else:
         await interaction.response.send_message(
             "You do not have enough currency to create a text channel.", ephemeral=True
-        )
+        )        
 
 
 @bot.slash_command(
@@ -637,12 +683,13 @@ async def help(interaction: discord.Interaction):
     embed = discord.Embed(title="My Commands")
 
     ban_desc = "To ban a user from the server."
-    tempBan_desc = "To ban a user temporarily from the server."
-    unban_desc = "To unban a user from the server."
+    # tempBan_desc = "To ban a user temporarily from the server."
+    # unban_desc = "To unban a user from the server."
     kick_desc = "To kick a user from the server."
     timeout_desc = "To timeout/mute a user in the server."
     nick_desc = "To change nickname of a user in the server."
     roles_desc = "To change roles of a user in the server."
+    ping_desc = "To ping a role in the server."
     drag_desc = "To drag a user between VCs in the server."
     findVc_desc = "To find which VC a user is in."
     currency_desc = "To show how much currency you have."
@@ -655,12 +702,13 @@ async def help(interaction: discord.Interaction):
     disconnect_desc = "To disconnect the music bot."
 
     embed.add_field(name="`/ban`", value=ban_desc, inline=False)
-    embed.add_field(name="`/temp_ban`", value=tempBan_desc, inline=False)
-    embed.add_field(name="`/unban`", value=unban_desc, inline=False)
+    # embed.add_field(name="`/temp_ban`", value=tempBan_desc, inline=False)
+    # embed.add_field(name="`/unban`", value=unban_desc, inline=False)
     embed.add_field(name="`/kick`", value=kick_desc, inline=False)
     embed.add_field(name="`/timeout`", value=timeout_desc, inline=False)
     embed.add_field(name="`/nickname`", value=nick_desc, inline=False)
     embed.add_field(name="`/roles`", value=roles_desc, inline=False)
+    embed.add_field(name="`/ping`", value=ping_desc, inline=False)
     embed.add_field(name="`/drag`", value=drag_desc, inline=False)
     embed.add_field(name="`/find_vc`", value=findVc_desc, inline=False)
     embed.add_field(name="`/get_currency`", value=currency_desc, inline=False)
