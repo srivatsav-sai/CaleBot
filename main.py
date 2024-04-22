@@ -174,7 +174,9 @@ async def on_message(message):
     print(message.author, message.channel.name, message.content, message.embeds)
 
     if message.author.id != bot.application_id:
-        await log_event(f"Message sent in {message.channel.name}", message.author, message.content)
+        await log_event(
+            f"Message sent in {message.channel.name}", message.author, message.content
+        )
 
     # anti-link system
 
@@ -267,7 +269,11 @@ async def on_message(message):
 @bot.event
 async def on_message_delete(message):
     if message.author.id != bot.application_id:
-        await log_event(f"Message Deleted from {message.channel.name}", message.author, message.content)
+        await log_event(
+            f"Message Deleted from {message.channel.name}",
+            message.author,
+            message.content,
+        )
 
 
 @bot.event
@@ -440,7 +446,6 @@ async def memberTempBan(
         "reason", "provide a reason to ban the selected user"
     ),
 ):
-    author = interaction.user
     guild = interaction.guild
     if not duration:
         duration = 10
@@ -547,6 +552,7 @@ async def manageRoles(
     await user.edit(roles=[manage_roles])
     await interaction.send(f"Roles have been updated for {user}", ephemeral=True)
 
+
 @bot.slash_command(
     name="find_vc",
     description="Find in which VC a user is in.",
@@ -564,9 +570,14 @@ async def findInVc(
     for voice_channel in guild.voice_channels:
         for member in voice_channel.members:
             if member == user:
-                await interaction.response.send_message(f"Found {user.name} in voice channel: {voice_channel.name}", ephemeral=True)
+                await interaction.response.send_message(
+                    f"Found {user.name} in voice channel: {voice_channel.name}",
+                    ephemeral=True,
+                )
                 return
-    await interaction.response.send_message(f"{user.name} is not currently in a voice channel.", ephemeral=True)
+    await interaction.response.send_message(
+        f"{user.name} is not currently in a voice channel.", ephemeral=True
+    )
 
 
 @bot.slash_command(

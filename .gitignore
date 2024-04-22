@@ -1,4 +1,4 @@
 venv/*
 *.mp3
-settings.py
+config.ini
 __pycache__/*
