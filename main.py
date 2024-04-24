@@ -27,11 +27,6 @@ intents.messages = True
 
 bot = commands.Bot(command_prefix="c.", intents=intents)
 
-cluster = MongoClient("mongodb://localhost:27017/")
-db = cluster["bottesting1"]
-collection = db["discordserver"]
-banlist = db["banlist"]
-
 member_voice_times = {}
 message_cooldowns = {}
 user_cooldowns = {}
@@ -59,7 +54,7 @@ config.read("config.ini")
 cluster = MongoClient(config.get("DATABASE", "mongodb_uri"))
 db = cluster[config.get("DATABASE", "database_name")]
 collection = db[config.get("DATABASE", "collection_name")]
-banlist = db[config.get("DATABASE", "banlist_collection")]
+ban_kick_collection = db[config.get("DATABASE", "ban_kick_collection")]
 
 TARGETING_VOICE_CHANNELS = [
     int(x) for x in config.get("VOICE", "targeting_voice_channels").split(",")
@@ -73,9 +68,10 @@ ALLOWED_LINK_DOMAINS = config.get("ANTI_LINK", "allowed_link_domains").split(","
 ALLOWED_LINK_CHANNELS = [
     int(x) for x in config.get("ANTI_LINK", "allowed_link_channels").split(",")
 ]
+MOD_MAIL_ROLE_ID = config.getint("GUILD", "mod_mail_role_id")
+
 
 # Logging functions
-
 
 async def log_message(message):
     if AUDIT_LOG_CHANNEL:
@@ -95,9 +91,12 @@ async def log_event(event_type, user, content):
             embed.set_footer(text=f"User ID: {user.id}")
             await log_channel.send(embed=embed)
 
+async def is_user_banned_kicked(ban_kick_collection, user_id):
+    result = ban_kick_collection.find_one({"_id": user_id})
+    return result is not None
+
 
 # Anti-link functions
-
 
 def strip_url(url):
     url = re.sub(r"^(?:https?|ftp)://", "", url)
@@ -106,6 +105,79 @@ def strip_url(url):
 
 
 # Bot events
+
+@bot.event
+async def on_dm(message):
+    author = message.author
+    guild = None
+
+    if message.guild is not None:
+        guild = message.guild
+
+    if message.content.lower().startswith("/mod_mail"):
+        is_banned_kicked = await is_user_banned_kicked(ban_kick_collection, author.id)
+        if guild is not None:
+            banned_members = await guild.ban_list()
+            kicked_members = await guild.kicked_members()
+
+            for banned_entry in banned_members:
+                if banned_entry.user == author:
+                    guild = message.guild
+                    break
+
+            for kicked_entry in kicked_members:
+                if kicked_entry.user == author:
+                    guild = message.guild
+                    break
+
+        if guild is None and not is_banned_kicked:
+            await author.send("An error occurred or you're not part of this server. Mod Mail might be unavailable.", ephemeral=True)
+            return
+        
+
+        moderator_role = guild.get_role(MOD_MAIL_ROLE_ID)
+
+        if moderator_role is None:
+            await author.send("The Mod Mail role is not configured or doesn't exist.", ephemeral=True)
+            return
+
+        channel_name = f"modmail-{author.name}"
+        new_channel = await guild.create_text_channel(channel_name, overwrites=get_modmail_overwrites(guild), category=moderator_role)
+
+        await new_channel.send(f"Hey {author.mention}, thanks for contacting us! A moderator will be with you shortly.")
+
+        await new_channel.send(f"{author.name}: {message.content[7:]}")
+
+        await notify_moderators(guild, new_channel)
+
+def get_modmail_overwrites(guild):
+    moderator_role = guild.get_role(MOD_MAIL_ROLE_ID)
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+        bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+        moderator_role: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+    }
+    return overwrites
+
+
+# Function to notify moderators about new modmail channels
+
+async def notify_moderators(guild, channel):
+    moderator_role = guild.get_role(MOD_MAIL_ROLE_ID)
+    if moderator_role is not None:
+        for member in moderator_role.members:
+            await member.send(f"A new Modmail channel has been created: {channel.mention}")
+
+
+@bot.event
+async def on_member_ban(member):
+    
+    await ban_kick_collection.insert_one({"_id": member.id, "action": "banned", "timestamp": datetime.datetime.utcnow()})
+
+@bot.event
+async def on_member_kick(member):
+    
+    await ban_kick_collection.insert_one({"_id": member.id, "action": "kicked", "timestamp": datetime.datetime.utcnow()})
 
 
 @bot.event
@@ -170,14 +242,15 @@ async def background_unban_task():
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
-        return
-    print(message.author, message.channel.name, message.content, message.embeds)
+    if message.guild is not None and message.author != bot.user:
+        if message.author == bot.user:
+            return
+        print(message.author, message.channel, message.content, message.embeds)
 
-    if message.author.id != bot.application_id:
-        await log_event(
-            f"Message sent in {message.channel.name}", message.author, message.content
-        )
+        if message.author.id != bot.application_id:
+            await log_event(
+                f"Message sent in {message.channel}", message.author, message.content
+            )
 
     # anti-link system
 
@@ -194,6 +267,7 @@ async def on_message(message):
     current_time = time.time()
 
     # anti-spam & anti-nuke systems
+
     if author in message_cooldowns:
         if current_time - message_cooldowns[author] < MESSAGE_COOLDOWN:
             if message:
@@ -230,6 +304,7 @@ async def on_message(message):
             user_cooldowns[author] = [current_time]
     else:
         user_cooldowns[author] = [current_time]
+
 
     # Level and Currency System
 
@@ -356,7 +431,6 @@ async def on_reaction_add(reaction, user):
 
 
 # Slash commands
-
 
 @bot.slash_command(
     name="get_currency",
@@ -553,6 +627,7 @@ async def manageRoles(
     await user.edit(roles=[manage_roles])
     await interaction.send(f"Roles have been updated for {user}", ephemeral=True)
 
+
 @bot.slash_command(
     name="ping",
     description="Pings a role in the server",
@@ -562,12 +637,8 @@ async def manageRoles(
 @application_checks.has_guild_permissions(manage_roles=True)
 async def pingRole(
     interaction: discord.Interaction,
-    role: discord.Role = discord.SlashOption(
-        "role", "Select a role to ping"
-    ),
-    message: str = discord.SlashOption(
-        "message", "Optional message to be included"
-    ),
+    role: discord.Role = discord.SlashOption("role", "Select a role to ping"),
+    message: str = discord.SlashOption("message", "Optional message to be included"),
 ):
     ping_message = f"<@&{role.id}>"
     if message:
@@ -628,21 +699,26 @@ async def voiceDrag(
     description="File a ticket to moderators for support.",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
-async def modMail(
-    interaction: discord.Interaction,
-    create_text: str = discord.SlashOption("name", "Give a name for the Text Channel"),
-    role: discord.Role = discord.SlashOption(
-        "category", "Select a category of support"
-    ),
-):
-    
-    guild = interaction.guild
-    category = f"<@&{role.id}>"
-    text_channel = await guild.create_text_channel(create_text)
-
+async def open_modmail(interaction: discord.Interaction):
     await interaction.response.send_message(
-        f"{text_channel.name} text channel has been created for {category} category of support."
+        "To open a Mod Mail channel, send a DM to the bot starting with the phrase '/mod_mail' followed by your message.",
+        ephemeral=True
     )
+# async def modMail(
+#     interaction: discord.Interaction,
+#     create_text: str = discord.SlashOption("name", "Give a name for the Text Channel"),
+#     role: discord.Role = discord.SlashOption(
+#         "category", "Select a category of support"
+#     ),
+# ):
+
+#     guild = interaction.guild
+#     category = f"<@&{role.id}>"
+#     text_channel = await guild.create_text_channel(create_text)
+
+#     await interaction.response.send_message(
+#         f"{text_channel.name} text channel has been created for {category} category of support."
+#     )
 
 
 
@@ -670,7 +746,7 @@ async def createText(
     else:
         await interaction.response.send_message(
             "You do not have enough currency to create a text channel.", ephemeral=True
-        )        
+        )
 
 
 @bot.slash_command(
@@ -733,7 +809,6 @@ async def help(interaction: discord.Interaction):
 
 # Music functions
 
-
 def delete_songs(temp_dir):
     for file in os.listdir(temp_dir):
         if file.endswith(".mp3"):
@@ -778,7 +853,6 @@ async def play_queue(ctx, temp_dir):
 
 
 # Music bot commands
-
 
 @bot.command(name="play", aliases=["connect", "join", "next", "add", "p"])
 async def streamx(ctx, url):
