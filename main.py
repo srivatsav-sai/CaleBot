@@ -7,7 +7,8 @@ import os
 import configparser
 import tempfile
 import aiohttp
-from pymongo import MongoClient
+import motor
+from pymongo import MongoClient, ReturnDocument
 from nextcord.ext import application_checks, commands
 from datetime import datetime, timedelta, timezone
 from collections import deque
@@ -35,6 +36,8 @@ bot = commands.Bot(command_prefix="c.", intents=intents)
 member_voice_times = {}
 message_cooldowns = {}
 user_cooldowns = {}
+user_messages = {}
+phone_number_regex = r"\d{10,}"
 unban_tasks = asyncio.PriorityQueue()
 
 ffmpeg_path = "C:/ProgramData/chocolatey/bin"
@@ -227,6 +230,32 @@ async def on_member_join(member):
 
 
 @bot.event
+async def on_command_completion(ctx):
+    if ctx.command.name in (
+        "play",
+        "connect",
+        "join",
+        "next",
+        "add",
+        "p",
+        "pause",
+        "stop",
+        "skip",
+        "queue",
+        "dc",
+        "boot",
+        "leave",
+        "loopqueue",
+        "lq",
+        "r",
+        "q",
+        "resume",
+        "disconnect",
+    ):
+        await ctx.message.delete()
+
+
+@bot.event
 async def on_dm(message):
     author = message.author
     guild = None
@@ -384,6 +413,24 @@ async def on_message(message):
                 user_cooldowns[author] = [current_time]
     else:
         user_cooldowns[author] = [current_time]
+
+    # auto-delete 10+ digits of numbers
+
+    if author not in user_messages:
+        user_messages[author.id] = []
+    user_messages[author.id].append(message.content)
+
+    potential_number = "".join(user_messages[author.id][-5:])
+    if re.match(phone_number_regex, potential_number):
+        await message.channel.delete_messages([message, user_messages[author.id][-2]])
+        user_messages[author.id].pop()
+        await message.channel.send(
+            f"Hey {author.mention}, please avoid sharing phone numbers in the chat."
+        )
+        user_messages[author.id].clear()
+
+    if len(user_messages[author.id]) > 6:
+        user_messages[author.id] = user_messages[author.id][-6:]
 
     # Level and Currency System
 
@@ -559,11 +606,8 @@ async def warn_user(
         "warned_at": datetime.now(),
         "count": 1,
     }
-    update = UpdateOne(
-        filter={"guild_id": interaction.guild.id, "user_id": user.id},
-        update={"$set": warn_data, "$inc": {"count": 1}},
-        upsert=True,
-    )
+    update_filter = {"guild_id": interaction.guild.id, "user_id": user.id}
+    update_ops = {"$inc": {"count": 1}}
 
     if user is None:
         await interaction.response.send_message(
@@ -578,16 +622,22 @@ async def warn_user(
         return
 
     try:
-        await warn_collection.update_one(update)
-        updated_doc = await warn_collection.find_one(
-            {"guild_id": interaction.guild.id, "user_id": user.id}
-        )
-        warning_count = updated_doc.get("count", 0)
+        query = {"user_id": user.id}
+        warned_user = warn_collection.find_one(query)
+        if warned_user:
+            updated_doc = warn_collection.update_one(
+                update_filter, update_ops, upsert=True
+            )
+        else:
+            warn_collection.insert_one(warn_data)
+            warned_user = warn_collection.find_one(query)
+        warning_count = warned_user.get("count", 0)
 
         if warning_count > warning_threshold:
             try:
+                await interaction.guild.ban(user)
                 await interaction.response.send_message(
-                    f"{user.mention} has crossed the warning threshold.",
+                    f"{user.mention} has crossed the warning threshold and has been banned.",
                     ephemeral=True,
                 )
             except discord.HTTPException as e:
@@ -597,6 +647,12 @@ async def warn_user(
                     ephemeral=True,
                 )
                 return
+        else:
+            await interaction.response.send_message(
+                f"Warning has been sent.",
+                ephemeral=True,
+            )
+
         await user.send(
             f"You have been warned in {interaction.guild.name} for: {reason}. Meeting {warning_threshold} warnings threshold will ban you."
         )
@@ -608,9 +664,7 @@ async def warn_user(
         )
         return
 
-    await interaction.response.send_message(
-        f"{user.mention} has been warned for: {reason}", ephemeral=False
-    )
+    await interaction.channel.send(f"{user.mention} has been warned for: {reason}")
 
 
 @bot.slash_command(
@@ -964,63 +1018,104 @@ async def createText(
 
 @bot.slash_command(
     name="acceptdrag",
-    description="Move a user to your voice channel (requires Manage Channels permission)",
-    guild_ids=[TESTING_GUILD_ID],  # Replace with your server's ID (optional)
+    description="Move a user to a voice channel (requires Move Members permission)",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(manage_channels=True)
 @application_checks.has_guild_permissions(move_members=True)
-async def acceptdrag(ctx, user: discord.Member):
-    """Approves a user's drag request."""
-    # Find the request document in MongoDB
-    request_doc = await drag_request_collection.find_one({"requester_id": user.id})
+async def acceptdrag(interaction: discord.Interaction, user: discord.Member, change_vc: discord.VoiceChannel = discord.SlashOption(
+        "vc", "Select a voice channel to move the user to"
+    ),
+    ):
+    request_doc = drag_request_collection.find_one({"requester_id": user.id})
     if not request_doc:
-        await ctx.respond(f"{user.name} has no pending drag request.")
+        await interaction.response.send_message(f"{user.name} has no pending drag request.")
         return
 
-    requested_user_id = request_doc["requested_user_id"]
-    requested_user = ctx.guild.get_member(requested_user_id)
+    requester_user_id = request_doc["requester_id"]
+    requester_user = interaction.guild.get_member(requester_user_id)
 
-    if not requested_user:
-        await ctx.respond(
-            f"Could not find the user who requested to be dragged to {user.name}'s voice channel."
+    if not requester_user:
+        await interaction.response.send_message(
+            f"Could not find the user who requested to be dragged {change_vc.name}voice channel.", ephemeral=True
         )
-        # Clean up the request document from MongoDB in case the user left
-        await drag_request_collection.delete_one({"_id": request_doc["_id"]})
+        drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
         return
 
     try:
-        await requested_user.move_to(user.voice.channel)
-        await ctx.respond(
-            f"{requested_user.name} has been dragged to {user.voice.channel.name}."
+        await requester_user.move_to(change_vc)
+        await interaction.response.send_message(
+            f"{requester_user.name} has been dragged to {change_vc.name}.", ephemeral=True
         )
-        # Remove the request document from MongoDB after successful drag
-        await drag_request_collection.delete_one({"_id": request_doc["_id"]})
+        await interaction.channel.send(f"{requester_user.mention} You have been dragged to {change_vc.name}.")
+        drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
     except discord.HTTPException as e:
-        await ctx.respond(
-            f"Failed to move {requested_user.name} to {user.voice.channel.name}. (Error: {e})"
+        await interaction.response.send_message(
+            f"Failed to move {requester_user.name} to {change_vc.name}. (Error: {e})", ephemeral=True
         )
 
 
 @bot.slash_command(
     name="denydrag",
-    description="Deny a user's drag request (requires Manage Channels permission)",
-    guild_ids=[TESTING_GUILD_ID],
+    description="Deny a user's drag request (requires Move Members permission)",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
 @commands.has_permissions(manage_channels=True)
 @application_checks.has_guild_permissions(move_members=True)
-async def denydrag(ctx, user: discord.Member):
-    """Denies a user's drag request."""
-    # Find the request document in MongoDB
-    request_doc = await drag_request_collection.find_one({"requester_id": user.id})
+async def denydrag(interaction: discord.Interaction, user: discord.Member):
+    request_doc = drag_request_collection.find_one({"requester_id": user.id})
     if not request_doc:
-        await ctx.respond(f"{user.name} has no pending drag request.")
+        await interaction.response.send_message(f"{user.name} has no pending drag request.")
         return
 
-    # Remove the request document from MongoDB even if denied
-    await drag_request_collection.delete_one({"_id": request_doc["_id"]})
-    await ctx.respond(
-        f"{user.name}'s drag request to {user.voice.channel.name} has been denied."
+    drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
+    await interaction.response.send_message(
+        f"{user.name}'s drag request has been denied.", ephemeral=True
     )
+    await interaction.channel.send(f"{user.mention} Your drag request has been denied.")
+
+
+@bot.slash_command(
+    name="request_vc_drag",
+    description="Ask a mod for a drag request.",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+async def dragMe(
+    interaction: discord.Interaction,
+    role: discord.Role = discord.SlashOption(
+        "mod_role", "Select a mod role to help you drag into a VC"
+    ),
+    change_vc: discord.VoiceChannel = discord.SlashOption(
+        "drag", "Change VC for the selected user"
+    ),
+):
+
+    if interaction.user.voice:
+        if interaction.user.voice.channel == change_vc:
+            await interaction.response.send_message(
+                "You're already in the same voice channel as that user!", ephemeral=True
+            )
+            return
+
+        new_request = {
+            "requester_id": interaction.user.id,
+            "role_id": role.id,
+            "requested_channel_id": change_vc.id,
+            "timestamp": datetime.now(),
+        }
+        drag_request_collection.insert_one(new_request)
+
+        mod_channel = bot.get_channel(MOD_CHANNEL_ID)
+        await interaction.response.send_message(
+            f"You requested to be dragged to {change_vc.name} voice channel. Please wait for a moderator's approval.", ephemeral=True
+        )
+        await mod_channel.send(
+            f"{role.mention}.{interaction.user.name} has requested to be dragged to {change_vc.name} voice channel. Approve with `/acceptdrag {interaction.user.name}` or deny with `/denydrag {interaction.user.name}`."
+        )
+    else:
+        await interaction.response.send_message(
+            "You're not in any voice channels.", ephemeral=True
+        )
 
 
 @bot.slash_command(
@@ -1079,41 +1174,6 @@ async def help(interaction: discord.Interaction):
     )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
-
-
-@bot.command
-async def dragme(ctx, user: discord.Member):
-    if user == ctx.author:
-        await ctx.send("You can't drag yourself!")
-        return
-
-    if user.voice:
-        if ctx.author.voice.channel == user.voice.channel:
-            await ctx.send("You're already in the same voice channel as that user!")
-            return
-
-        if MOD_ROLE in [role.name for role in ctx.author.roles]:
-            await ctx.author.move_to(user.voice.channel)
-            await ctx.send(f"You have been dragged to {user.voice.channel.name}.")
-        else:
-            new_request = {
-                "requester_id": ctx.author.id,
-                "requested_user_id": user.id,
-                "requested_channel_id": user.voice.channel.id,
-                "timestamp": datetime.now(),
-            }
-            await drag_request_collection.insert_one(new_request)
-
-            mod_channel = bot.get_channel(MOD_CHANNEL_ID)
-            await ctx.send(
-                f"You requested to be dragged to {user.name}'s voice channel. Please wait for a moderator's approval."
-            )
-            await mod_channel.send(
-                f"{ctx.author.name} (@{ctx.author.mention}) has requested to be dragged to {user.name}'s voice channel ({user.voice.channel.name}). Approve with `!acceptdrag {ctx.author.mention}` or deny with `!denydrag {ctx.author.mention}`."
-            )
-
-    else:
-        await ctx.send(f"{user.name} is not in a voice channel.")
 
 
 # Music functions
@@ -1266,7 +1326,7 @@ async def skip(ctx):
 is_looping = False
 
 
-@bot.command(name="loop", aliases=["loopsong", "loops", "ls"])
+@bot.command(name="loop", aliases=["loopqueue", "lq"])
 async def loop(ctx):
 
     global is_looping
