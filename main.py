@@ -1023,13 +1023,18 @@ async def createText(
 )
 @commands.has_permissions(manage_channels=True)
 @application_checks.has_guild_permissions(move_members=True)
-async def acceptdrag(interaction: discord.Interaction, user: discord.Member, change_vc: discord.VoiceChannel = discord.SlashOption(
+async def acceptdrag(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    change_vc: discord.VoiceChannel = discord.SlashOption(
         "vc", "Select a voice channel to move the user to"
     ),
-    ):
+):
     request_doc = drag_request_collection.find_one({"requester_id": user.id})
     if not request_doc:
-        await interaction.response.send_message(f"{user.name} has no pending drag request.")
+        await interaction.response.send_message(
+            f"{user.name} has no pending drag request."
+        )
         return
 
     requester_user_id = request_doc["requester_id"]
@@ -1037,21 +1042,30 @@ async def acceptdrag(interaction: discord.Interaction, user: discord.Member, cha
 
     if not requester_user:
         await interaction.response.send_message(
-            f"Could not find the user who requested to be dragged {change_vc.name}voice channel.", ephemeral=True
+            f"Could not find the user who requested to be dragged {change_vc.name}voice channel.",
+            ephemeral=True,
         )
-        drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
+        drag_request_collection.delete_one(
+            {"requester_id": request_doc["requester_id"]}
+        )
         return
 
     try:
         await requester_user.move_to(change_vc)
         await interaction.response.send_message(
-            f"{requester_user.name} has been dragged to {change_vc.name}.", ephemeral=True
+            f"{requester_user.name} has been dragged to {change_vc.name}.",
+            ephemeral=True,
         )
-        await interaction.channel.send(f"{requester_user.mention} You have been dragged to {change_vc.name}.")
-        drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
+        await interaction.channel.send(
+            f"{requester_user.mention} You have been dragged to {change_vc.name}."
+        )
+        drag_request_collection.delete_one(
+            {"requester_id": request_doc["requester_id"]}
+        )
     except discord.HTTPException as e:
         await interaction.response.send_message(
-            f"Failed to move {requester_user.name} to {change_vc.name}. (Error: {e})", ephemeral=True
+            f"Failed to move {requester_user.name} to {change_vc.name}. (Error: {e})",
+            ephemeral=True,
         )
 
 
@@ -1065,7 +1079,9 @@ async def acceptdrag(interaction: discord.Interaction, user: discord.Member, cha
 async def denydrag(interaction: discord.Interaction, user: discord.Member):
     request_doc = drag_request_collection.find_one({"requester_id": user.id})
     if not request_doc:
-        await interaction.response.send_message(f"{user.name} has no pending drag request.")
+        await interaction.response.send_message(
+            f"{user.name} has no pending drag request."
+        )
         return
 
     drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
@@ -1107,7 +1123,8 @@ async def dragMe(
 
         mod_channel = bot.get_channel(MOD_CHANNEL_ID)
         await interaction.response.send_message(
-            f"You requested to be dragged to {change_vc.name} voice channel. Please wait for a moderator's approval.", ephemeral=True
+            f"You requested to be dragged to {change_vc.name} voice channel. Please wait for a moderator's approval.",
+            ephemeral=True,
         )
         await mod_channel.send(
             f"{role.mention}.{interaction.user.name} has requested to be dragged to {change_vc.name} voice channel. Approve with `/acceptdrag {interaction.user.name}` or deny with `/denydrag {interaction.user.name}`."
