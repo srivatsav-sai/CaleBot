@@ -90,6 +90,7 @@ ALLOWED_LINK_DOMAINS = config.get("ANTI_LINK", "allowed_link_domains").split(","
 ALLOWED_LINK_CHANNELS = [
     int(x) for x in config.get("ANTI_LINK", "allowed_link_channels").split(",")
 ]
+ADMIN_ROLE = config.getint("GUILD", "admin_role_id")
 MOD_ROLE = config.getint("GUILD", "mod_role_id")
 MOD_CHANNEL_ID = config.getint("CHANNELS", "mod_channel")
 MOD_MAIL_ROLE_ID = config.getint("GUILD", "mod_mail_role_id")
@@ -848,7 +849,31 @@ async def changeNick(
 
 
 @bot.slash_command(
-    name="roles",
+    name="give_admin",
+    description="Give Administrator Permissions to a person in server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+@commands.has_permissions(administrator=True)
+@application_checks.has_guild_permissions(administrator=True)
+async def GiveAdmin(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "Select a user to give admin perms in server"
+    ),
+    admin_role: discord.Role = discord.SlashOption("admin_role", "Select the role with admin perms.")
+):
+    if user is None:
+        await interaction.response.send_message(
+            "Please specify a valid user to give admin perms to.", ephemeral=True
+        )
+        return
+    await user.edit(roles=[admin_role])
+    await interaction.send(f"Administrator Permissions have been given to {user}", ephemeral=True)
+    await interaction.channel.send(f"{user.mention} You have recieved Administrator Permissions from the Owner.")
+
+
+@bot.slash_command(
+    name="change_roles",
     description="Manage roles of a person in server",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
@@ -873,7 +898,7 @@ async def manageRoles(
 
 
 @bot.slash_command(
-    name="ping",
+    name="ping_role",
     description="Pings a role in the server",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
@@ -894,63 +919,6 @@ async def pingRole(
         ping_message += f"{message}"
 
     await interaction.response.send_message(ping_message)
-
-
-@bot.slash_command(
-    name="find_vc",
-    description="Find in which VC a user is in.",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
-)
-async def findInVc(
-    interaction: discord.Interaction,
-    user: discord.Member = discord.SlashOption(
-        "user", "Select a user to find for in a VC"
-    ),
-):
-    if user is None:
-        await interaction.response.send_message(
-            "Please specify a valid user to find.", ephemeral=True
-        )
-        return
-
-    guild = interaction.guild
-
-    for voice_channel in guild.voice_channels:
-        for member in voice_channel.members:
-            if member == user:
-                await interaction.response.send_message(
-                    f"Found {user.name} in voice channel: {voice_channel.name}",
-                    ephemeral=True,
-                )
-                return
-    await interaction.response.send_message(
-        f"{user.name} is not currently in a voice channel.", ephemeral=True
-    )
-
-
-@bot.slash_command(
-    name="drag",
-    description="Drag a person to a voice channel in server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
-)
-@commands.has_guild_permissions(administrator=True)
-@application_checks.has_guild_permissions(move_members=True)
-async def voiceDrag(
-    interaction: discord.Interaction,
-    user: discord.Member = discord.SlashOption(
-        "user", "Select a user to drag to a voice channel"
-    ),
-    change_vc: discord.VoiceChannel = discord.SlashOption(
-        "drag", "Change VC for the selected user"
-    ),
-):
-    if user is None:
-        await interaction.response.send_message(
-            "Please specify a valid user to drag.", ephemeral=True
-        )
-        return
-    await user.move_to(change_vc)
-    await interaction.send(f"{user} has been dragged to {change_vc}", ephemeral=True)
 
 
 @bot.slash_command(
@@ -990,13 +958,14 @@ async def open_modmail(
 
 
 @bot.slash_command(
-    name="create_text",
-    description="Create a text channel in the server.",
+    name="create_vc",
+    description="Create a private voice channel in the server.",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
-async def createText(
+async def createVoice(
     interaction: discord.Interaction,
-    create_text: str = discord.SlashOption("name", "Give a name for the Text Channel"),
+    create_voice: str = discord.SlashOption("name", "Give a name for the Text Channel"),
+    user_limit: int = discord.SlashOption("limit", "Set a limit to how many users can join the Voice Channel"),
 ):
     query = {"_id": interaction.user.id}
     user = currency_collection.find_one(query)
@@ -1005,19 +974,120 @@ async def createText(
     if currency >= 10:
         currency_collection.update_one(query, {"$set": {"currency": currency - 10}})
 
-        text_channel = await guild.create_text_channel(create_text)
+        voice_channel = await guild.create_voice_channel(name=create_voice, user_limit=user_limit)
 
         await interaction.response.send_message(
-            f"{text_channel.name} text channel has been created.", ephemeral=True
+            f"{voice_channel.name} voice channel has been created with a limit of {user_limit} users.", ephemeral=True
         )
     else:
         await interaction.response.send_message(
-            "You do not have enough currency to create a text channel.", ephemeral=True
+            "You do not have enough currency to create a voice channel.", ephemeral=True
         )
 
 
 @bot.slash_command(
-    name="acceptdrag",
+    name="find_in_vc",
+    description="Find in which VC a user is in.",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+async def findInVc(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "Select a user to find for in a VC"
+    ),
+):
+    if user is None:
+        await interaction.response.send_message(
+            "Please specify a valid user to find.", ephemeral=True
+        )
+        return
+
+    guild = interaction.guild
+
+    for voice_channel in guild.voice_channels:
+        for member in voice_channel.members:
+            if member == user:
+                await interaction.response.send_message(
+                    f"Found {user.name} in voice channel: {voice_channel.name}",
+                    ephemeral=True,
+                )
+                return
+    await interaction.response.send_message(
+        f"{user.name} is not currently in a voice channel.", ephemeral=True
+    )
+
+
+@bot.slash_command(
+    name="vc_drag",
+    description="Drag a person to a voice channel in server",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(move_members=True)
+async def voiceDrag(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "Select a user to drag to a voice channel"
+    ),
+    change_vc: discord.VoiceChannel = discord.SlashOption(
+        "drag", "Change VC for the selected user"
+    ),
+):
+    if user is None:
+        await interaction.response.send_message(
+            "Please specify a valid user to drag.", ephemeral=True
+        )
+        return
+    await user.move_to(change_vc)
+    await interaction.send(f"{user} has been dragged to {change_vc}", ephemeral=True)    
+
+
+@bot.slash_command(
+    name="request_vc_drag",
+    description="Ask a mod for a drag request.",
+    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+)
+async def dragMe(
+    interaction: discord.Interaction,
+    role: discord.Role = discord.SlashOption(
+        "mod_role", "Select a mod role to help you drag into a VC"
+    ),
+    change_vc: discord.VoiceChannel = discord.SlashOption(
+        "drag", "Change VC for the selected user"
+    ),
+):
+
+    if interaction.user.voice:
+        if interaction.user.voice.channel == change_vc:
+            await interaction.response.send_message(
+                "You're already in the same voice channel as that user!", ephemeral=True
+            )
+            return
+
+        new_request = {
+            "requester_id": interaction.user.id,
+            "role_id": role.id,
+            "requested_channel_id": change_vc.id,
+            "timestamp": datetime.now(),
+        }
+        drag_request_collection.insert_one(new_request)
+
+        mod_channel = bot.get_channel(MOD_CHANNEL_ID)
+        await interaction.response.send_message(
+            f"You requested to be dragged to {change_vc.name} voice channel. Please wait for a moderator's approval.",
+            ephemeral=True,
+        )
+        await mod_channel.send(
+            f"{role.mention}.{interaction.user.name} has requested to be dragged to {change_vc.name} voice channel. Approve with `/acceptdrag {interaction.user.name}` or deny with `/denydrag {interaction.user.name}`."
+        )
+    else:
+        await interaction.response.send_message(
+            "You're not in any voice channels.", ephemeral=True
+        )        
+
+
+@bot.slash_command(
+    name="accept_vc_drag",
     description="Move a user to a voice channel (requires Move Members permission)",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
@@ -1070,7 +1140,7 @@ async def acceptdrag(
 
 
 @bot.slash_command(
-    name="denydrag",
+    name="deny_vc_drag",
     description="Deny a user's drag request (requires Move Members permission)",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
 )
@@ -1092,50 +1162,6 @@ async def denydrag(interaction: discord.Interaction, user: discord.Member):
 
 
 @bot.slash_command(
-    name="request_vc_drag",
-    description="Ask a mod for a drag request.",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
-)
-async def dragMe(
-    interaction: discord.Interaction,
-    role: discord.Role = discord.SlashOption(
-        "mod_role", "Select a mod role to help you drag into a VC"
-    ),
-    change_vc: discord.VoiceChannel = discord.SlashOption(
-        "drag", "Change VC for the selected user"
-    ),
-):
-
-    if interaction.user.voice:
-        if interaction.user.voice.channel == change_vc:
-            await interaction.response.send_message(
-                "You're already in the same voice channel as that user!", ephemeral=True
-            )
-            return
-
-        new_request = {
-            "requester_id": interaction.user.id,
-            "role_id": role.id,
-            "requested_channel_id": change_vc.id,
-            "timestamp": datetime.now(),
-        }
-        drag_request_collection.insert_one(new_request)
-
-        mod_channel = bot.get_channel(MOD_CHANNEL_ID)
-        await interaction.response.send_message(
-            f"You requested to be dragged to {change_vc.name} voice channel. Please wait for a moderator's approval.",
-            ephemeral=True,
-        )
-        await mod_channel.send(
-            f"{role.mention}.{interaction.user.name} has requested to be dragged to {change_vc.name} voice channel. Approve with `/acceptdrag {interaction.user.name}` or deny with `/denydrag {interaction.user.name}`."
-        )
-    else:
-        await interaction.response.send_message(
-            "You're not in any voice channels.", ephemeral=True
-        )
-
-
-@bot.slash_command(
     name="help",
     description="Shows a list of all slash commands in the server",
     guild_ids=[config.getint("GUILD", "testing_guild_id")],
@@ -1148,15 +1174,21 @@ async def help(interaction: discord.Interaction):
     # tempBan_desc = "To ban a user temporarily from the server."
     # unban_desc = "To unban a user from the server."
     kick_desc = "To kick a user from the server."
+    warn_desc = "To warn a user in the server."
     timeout_desc = "To timeout/mute a user in the server."
     nick_desc = "To change nickname of a user in the server."
+    giveAdmin_desc = "To give Administrator Permissions to a user in the server."
     roles_desc = "To change roles of a user in the server."
     ping_desc = "To ping a role in the server."
     drag_desc = "To drag a user between VCs in the server."
+    dragReq_desc = "To send a drag request for VCs in the server."
+    dragAccept_desc = "To accept a drag request of a user in the server."
+    dragDeny_desc = "To deny a drag request of a user in the server."
     findVc_desc = "To find which VC a user is in."
+    modMail_desc = "To open a modmail ticket for support from moderators."
     currency_desc = "To show how much currency you have."
     level_desc = "To show how many levels you have gained."
-    createText_desc = "To create a text channel using 10 currency."
+    createVoice_desc = "To create a private voice channel using 10 currency."
     play_desc = "To play/add songs into the music bot."
     pause_desc = "To pause music using the music bot."
     resume_desc = "To resume music using the music bot."
@@ -1167,15 +1199,21 @@ async def help(interaction: discord.Interaction):
     # embed.add_field(name="`/temp_ban`", value=tempBan_desc, inline=False)
     # embed.add_field(name="`/unban`", value=unban_desc, inline=False)
     embed.add_field(name="`/kick`", value=kick_desc, inline=False)
+    embed.add_field(name="`/warn`", value=warn_desc, inline=False)
     embed.add_field(name="`/timeout`", value=timeout_desc, inline=False)
     embed.add_field(name="`/nickname`", value=nick_desc, inline=False)
-    embed.add_field(name="`/roles`", value=roles_desc, inline=False)
-    embed.add_field(name="`/ping`", value=ping_desc, inline=False)
-    embed.add_field(name="`/drag`", value=drag_desc, inline=False)
-    embed.add_field(name="`/find_vc`", value=findVc_desc, inline=False)
+    embed.add_field(name="`/give_admin`", value=giveAdmin_desc, inline=False)
+    embed.add_field(name="`/change_roles`", value=roles_desc, inline=False)
+    embed.add_field(name="`/ping_role`", value=ping_desc, inline=False)
+    embed.add_field(name="`/vc_drag`", value=drag_desc, inline=False)
+    embed.add_field(name="`/request_vc_drag`", value=dragReq_desc, inline=False)
+    embed.add_field(name="`/accept_vc_drag`", value=dragAccept_desc, inline=False)
+    embed.add_field(name="`/deny_vc_drag`", value=dragDeny_desc, inline=False)
+    embed.add_field(name="`/mod_mail`", value=modMail_desc, inline=False)
+    embed.add_field(name="`/find_in_vc`", value=findVc_desc, inline=False)
     embed.add_field(name="`/get_currency`", value=currency_desc, inline=False)
     embed.add_field(name="`/get_level`", value=level_desc, inline=False)
-    embed.add_field(name="`/create_text`", value=createText_desc, inline=False)
+    embed.add_field(name="`/create_voice`", value=createVoice_desc, inline=False)
     embed.add_field(
         name="`c.play or c.p or c.add or c.next or c.connect or c.join`",
         value=play_desc,
