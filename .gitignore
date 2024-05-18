@@ -1,4 +1,5 @@
 venv/*
 *.mp3
 config.ini
+main-dupe.py
 __pycache__/*

@@ -10,10 +10,15 @@ import aiohttp
 import motor
 import json
 import requests
+import threading
+import signal
+from discord.ext.commands import has_permissions, MissingPermissions, BadArgument
 from youtube_dl import YoutubeDL
 from pymongo import MongoClient, ReturnDocument
+from nextcord import SelectOption
 from nextcord import FFmpegOpusAudio
 from nextcord.ext import application_checks, commands
+from nextcord.ui import Button, View, StringSelect
 from datetime import datetime, timedelta, timezone
 from collections import deque
 from pytube import Search
@@ -35,14 +40,23 @@ intents.reactions = True
 intents.typing = True
 intents.messages = True
 
-bot = commands.Bot(command_prefix="c.", intents=intents)
+bot = commands.Bot(
+    # command_prefix="c.",
+    intents=intents,
+    case_insensitive=False,
+)
+exit_event = threading.Event()
+
+master_vc_user = {}
 
 member_voice_times = {}
 message_cooldowns = {}
 user_cooldowns = {}
 user_messages = {}
-phone_number_regex = r"\d{10,}"
-unban_tasks = asyncio.PriorityQueue()
+phone_number_regex = (
+    r"^\s*(?:\+?(\d{1,3}))?[-. (]*(\d{3})[-. )]*(\d{3})[-. ]*(\d{4})(?: *x(\d+))?\s*$"
+)
+unban_tasks = []
 
 music_queue = {}
 colors = {
@@ -76,20 +90,10 @@ config.read("config.ini")
 cluster = MongoClient(config.get("DATABASE", "mongodb_uri"))
 db = cluster[config.get("DATABASE", "database_name")]
 currency_collection = db[config.get("DATABASE", "currency_collection")]
-ban_collection = db[config.get("DATABASE", "ban_collection")]
-kick_collection = db[config.get("DATABASE", "kick_collection")]
+member_leave_collection = db[config.get("DATABASE", "member_leave_collection")]
 warn_collection = db[config.get("DATABASE", "warn_collection")]
-drag_request_collection = db[config.get("DATABASE", "dragrequest_collection")]
 
-drag_request_model = {
-    "_id": ObjectId(),
-    "requester_id": int,
-    "requested_user_id": int,
-    "requested_channel_id": int,
-    "timestamp": datetime.now(),
-}
-
-TESTING_GUILD_ID = config.get("GUILD", "testing_guild_id")
+TESTING_GUILD_ID = config.getint("GUILD", "testing_guild_id")
 TARGETING_VOICE_CHANNELS = [
     int(x) for x in config.get("VOICE", "targeting_voice_channels").split(",")
 ]
@@ -107,311 +111,7 @@ MOD_ROLE = config.getint("GUILD", "mod_role_id")
 MOD_CHANNEL_ID = config.getint("CHANNELS", "mod_channel")
 MOD_MAIL_ROLE_ID = config.getint("GUILD", "mod_mail_role_id")
 AUTO_ASSIGN_ROLE_ID = config.getint("GUILD", "auto_role_id")
-
-
-# Music functions
-
-
-def setup():
-    voices = bot.voice_clients
-    music_queue.clear()
-    if voices is not None:
-        for voice in voices:
-            bot.loop.create_task(voice.disconnect())
-
-
-def now_playing(ctx):
-    guild_id = TESTING_GUILD_ID
-    if guild_id not in music_queue.keys():
-        music_queue[guild_id] = []
-    voice = ctx.channel.guild.voice_client
-    if voice is None:
-        return None
-    if voice.is_playing():
-        return music_queue[guild_id][0]
-
-
-def get_current_song(ctx):
-    guild_id = TESTING_GUILD_ID
-    if guild_id not in music_queue.keys():
-        music_queue[guild_id] = []
-    voice = ctx.channel.guild.voice_client
-    if voice is None:
-        return None
-    return music_queue[guild_id][0]
-
-
-def next(ctx):
-    guild_id = TESTING_GUILD_ID
-    if len(music_queue[guild_id]) > 1:
-        music_queue[guild_id].pop(0)
-        return music_queue[guild_id][0]
-    else:
-        music_queue[guild_id] = []
-        return None
-
-
-def addsong(ctx, arg):
-    if TESTING_GUILD_ID not in music_queue.keys():
-        music_queue[TESTING_GUILD_ID] = []
-    lst = args_to_url(arg)
-    if lst != ():
-        url, src, thumb, title = lst
-        music_queue[TESTING_GUILD_ID].append([url, src, thumb, title, ctx])
-        return url, src, thumb, title, ctx
-    else:
-        embed = discord.Embed(title="Song wasn't found.", color=colors["neutral"])
-        ctx.send(embed=embed)
-        raise Exception("Song wasn't found.")
-
-
-def clear(ctx):
-    guild_id = TESTING_GUILD_ID
-    music_queue[guild_id] = []
-    return None
-
-
-def remove(id):
-    if TESTING_GUILD_ID not in music_queue.keys():
-        music_queue[TESTING_GUILD_ID] = []
-    music_queue[TESTING_GUILD_ID].pop(id)
-    return None
-
-
-def args_to_url(args):
-    if type(args) is tuple:
-        args = " ".join(args)
-    with YoutubeDL(ytdlOpts) as ytdl:
-        if args.find("https://") != -1 or args.find("http://") != -1:
-            if (
-                args.find("https://www.youtube.com") != -1
-                or args.find("https://youtu.be") != -1
-            ):
-                src = "youtube"
-                ytdl_data = ytdl.extract_info(args, download=False)
-                title = ytdl_data["title"]
-                url = ytdl_data["formats"][1]["url"]
-                thumb = ytdl_data["thumbnail"]
-                return url, src, thumb, title
-            else:
-                args = args.replace(" ", "")
-                if args.find("spotify") != -1:
-                    src = "spotify"
-                elif args.find("apple") != -1:
-                    src = "apple"
-                else:
-                    src = "other"
-                apiurl = "https://api.song.link/v1-alpha.1/links?url=" + args
-                try:
-                    response = json.loads(requests.get(apiurl).text)
-                    song_title = response["entitiesByUniqueId"][
-                        response["entityUniqueId"]
-                    ]["title"]
-                    song_artist = response["entitiesByUniqueId"][
-                        response["entityUniqueId"]
-                    ]["artistName"]
-                    thumb = response["entitiesByUniqueId"][response["entityUniqueId"]][
-                        "thumbnailUrl"
-                    ]
-                    yturl = response["linksByPlatform"]["youtube"]["url"]
-                    ytdl_data = ytdl.extract_info(yturl, download=False)
-                    url = ytdl_data["formats"][1]["url"]
-                    title = song_title + " by " + song_artist
-                    return (
-                        url,
-                        src,
-                        thumb,
-                        title,
-                    )
-                except:
-                    return ()
-        else:
-            src = "youtube"
-            ytdl_data = ytdl.extract_info(f"ytsearch:{args}", download=False)
-            title = ytdl_data["entries"][0]["title"]
-            url = ytdl_data["entries"][0]["formats"][1]["url"]
-            thumb = ytdl_data["entries"][0]["thumbnail"]
-            return (
-                url,
-                src,
-                thumb,
-                title,
-            )
-
-
-def songplayer(ctx, url):
-    voice = ctx.channel.guild.voice_client
-    guildid = TESTING_GUILD_ID
-    player = FFmpegOpusAudio(url, **ffmpegOpts)
-    after = lambda err: aftersong(guildid, err)
-    try:
-        voice.play(player, after=after)
-    except Exception as e:
-        return e
-    return
-
-
-async def ensure_voice(
-    ctx,
-):
-    guild_id = TESTING_GUILD_ID
-    voice = ctx.channel.guild.voice_client
-    authorChannel = ctx.author.voice.channel if ctx.author.voice else None
-    if authorChannel is None:
-        embed = discord.Embed(
-            title="You must be in a voice channel to use this.", color=colors["error"]
-        )
-        await ctx.send(embed=embed)
-        return False
-    else:
-        if guild_id not in music_queue.keys():
-            music_queue[guild_id] = []
-        if voice is None:
-            await ctx.author.voice.channel.connect()
-            embed = discord.Embed(
-                title="Connected to your voice channel.", color=colors["success"]
-            )
-            await ctx.send(embed=embed)
-        elif ctx.author.voice.channel is not voice.channel:
-            await voice.move_to(ctx.author.voice.channel)
-            embed = discord.Embed(
-                title="Inconsistency in bot's channel, moved to your voice channel.",
-                color=colors["neutral"],
-            )
-            await ctx.send(embed=embed)
-        await ctx.guild.change_voice_state(
-            channel=ctx.author.voice.channel, self_mute=False, self_deaf=True
-        )
-        return True
-
-
-def aftersong(guildid, err=None):
-    guildid = TESTING_GUILD_ID
-    try:
-        ctx = music_queue[guildid][0][4]
-    except IndexError:
-        return
-    nxt = next(ctx)
-    if err is not None:
-        embed = discord.Embed(
-            title="Unable to play the next song.",
-            description=str(e),
-            color=colors["error"],
-        )
-        coro = ctx.send(embed=embed)
-    else:
-        if nxt is None:
-            coro = ctx.send(
-                embed=discord.Embed(
-                    title="Queue ended.",
-                    description="No next song to play, you can add a song to queue using the play command",
-                    color=colors["error"],
-                )
-            )
-        else:
-            url, src, title = nxt[0], nxt[1], nxt[3]
-            embed = discord.Embed(
-                title="Playing Next", description="**" + title + "**", color=colors[src]
-            )
-            coro = ctx.send(embed=embed)
-
-    fut = asyncio.run_coroutine_threadsafe(coro, bot.loop)
-    if nxt is not None:
-        songplayer(ctx, url)
-    try:
-        fut.result()
-    except Exception as e:
-        print(e)
-        pass
-
-
-async def playsong(ctx, arg):
-    if arg == ():
-        embed = discord.Embed(
-            title="Please enter the name of the song you want me to play.",
-            description="I will look it up on youtube, you can even give me spotify or apple music links too",
-            color=0xF54257,
-        )
-        await ctx.send(embed=embed)
-        return
-    check = await ensure_voice(ctx)
-    if check is False:
-        return
-    guild_id = TESTING_GUILD_ID
-    voice = ctx.channel.guild.voice_client
-    ctxa = ctx
-    if guild_id not in music_queue.keys():
-        music_queue[guild_id] = []
-
-    if voice.is_playing():
-        embed = discord.Embed(
-            title="A song is already being played, adding this one to the Queue",
-            color=colors["neutral"],
-        )
-        message = await ctx.send(embed=embed)
-        try:
-            url, src, thumb, title, ctx = addsong(ctx, arg)
-            embed = discord.Embed(
-                title="A song is already being played, adding this one to the Queue",
-                description="**" + title + "**",
-                color=colors[src],
-            )
-            embed.set_thumbnail(url=thumb)
-            await message.edit(embed=embed)
-        except Exception as e:
-            embed = discord.Embed(
-                title="Unable to play the song.",
-                description=str(e),
-                color=colors["error"],
-            )
-            await message.edit(embed=embed)
-        return
-    # try:
-    url, src, thumb, title, ctx = addsong(ctxa, arg)
-    songplayer(ctx, url)
-    embed = discord.Embed(title=f"Now Playing", description=title, color=colors[src])
-    embed.set_thumbnail(url=thumb)
-    await ctx.send(embed=embed)
-
-
-async def skip(ctx, position=0):
-    check = await ensure_voice(ctx)
-    if check is False:
-        return
-    if position != 0:
-        remove(ctx, id=position)
-        return
-    voice = ctx.channel.guild.voice_client
-    try:
-        voice.stop()
-        nxt = next(ctx)
-        if nxt is None:
-            await ctx.send(
-                embed=discord.Embed(
-                    title="Skipped the song.",
-                    description="Queue is empty cannot proceed, add songs using the play/add command",
-                    color=colors["success"],
-                )
-            )
-        else:
-            url, src, title = nxt[0], nxt[1], nxt[3]
-            await ctx.send(
-                embed=discord.Embed(
-                    title="Skipped the song, Playing Next",
-                    description="**" + title + "**",
-                    color=colors[src],
-                )
-            )
-            songplayer(ctx, url)
-    except Exception as e:
-        ctx.send(
-            embed=discord.Embed(
-                title="An Error Occured whilst trying to skip song",
-                description=e,
-                color=colors["error"],
-            )
-        )
-        return
+MAIL_CUSTOMER_ID = config.getint("GUILD", "mail_customer_id")
 
 
 # Logging functions
@@ -436,97 +136,9 @@ async def log_event(event_type, user, content):
             await log_channel.send(embed=embed)
 
 
-async def is_user_banned(ban_collection, user_id):
-    result = ban_collection.find_one({"_id": user_id})
+async def is_user_removed(member_leave_collection, user_id):
+    result = member_leave_collection.find_one({"_id": user_id})
     return result is not None
-
-
-async def is_user_kicked(kick_collection, user_id):
-    result = kick_collection.find_one({"_id": user_id})
-    return result is not None
-
-
-def create_modmail_channel(interaction, mod_role_name, user_id, channel_name):
-    guild = interaction.guild
-    overwrites = {
-        guild.default_role: discord.PermissionOverwrite(
-            read_messages=False, send_messages=False
-        ),
-        bot.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
-    }
-    moderator_role = get_mod_role_by_name(mod_role_name, guild)
-
-    if moderator_role:
-        overwrites[moderator_role] = discord.PermissionOverwrite(
-            read_messages=True, send_messages=True
-        )
-        return guild.create_text_channel(channel_name, overwrites=overwrites)
-
-
-async def handle_server_user_modmail(interaction, user, mod_role_name):
-
-    modmail_channel = await create_modmail_channel(
-        user.id, channel_name=f"modmail-{user.id}"
-    )
-
-    await modmail_channel.send(
-        f"Hey {user.mention}, thanks for contacting us! A moderator will be with you shortly if they choose to respond."
-    )
-
-    if mod_role_name:
-        moderator_role = get_mod_role_by_name(mod_role_name, interaction.guild)
-        if moderator_role:
-            moderator_role = mod_role_name
-            await modmail_channel.send(f"<@&{moderator_role.id}>")
-    else:
-        await modmail_channel.send(
-            f"You did not select a specific category of mod you want to interact with."
-        )
-
-
-async def handle_banned_user_modmail(interaction, user, mod_role_name):
-
-    modmail_channel = await create_modmail_channel(user.id, f"modmail-{user.id}")
-
-    await modmail_channel.send(
-        f"Hey {user.mention}, thanks for contacting us! You are currently banned from the server. A moderator will be with you shortly if they choose to respond."
-    )
-
-    if mod_role_name:
-        moderator_role = get_mod_role_by_name(mod_role_name, interaction.guild)
-        if moderator_role:
-            moderator_role = mod_role_name
-            await modmail_channel.send(f"<@&{moderator_role.id}>")
-    else:
-        await modmail_channel.send(
-            f"You did not select a specific category of mod you want to interact with."
-        )
-
-
-async def handle_kicked_user_modmail(interaction, user, mod_role_name):
-
-    modmail_channel = await create_modmail_channel(user.id, f"modmail-{user.id}")
-
-    await modmail_channel.send(
-        f"Hey {user.mention}, thanks for contacting us! You are currently kicked from the server. A moderator will be with you shortly if they choose to respond."
-    )
-
-    if mod_role_name:
-        moderator_role = get_mod_role_by_name(mod_role_name, interaction.guild)
-        if moderator_role:
-            moderator_role = mod_role_name
-            await modmail_channel.send(f"<@&{moderator_role.id}>")
-    else:
-        await modmail_channel.send(
-            f"You did not select a specific category of mod you want to interact with."
-        )
-
-
-def get_mod_role_by_name(mod_role_name, guild):
-    for role in guild.roles:
-        if role.name.lower() == mod_role_name.lower():
-            return role
-    return None
 
 
 # Anti-link functions
@@ -536,6 +148,21 @@ def strip_url(url):
     url = re.sub(r"^(?:https?|ftp)://", "", url)
     url = re.sub(r"/.*$", "", url)
     return url
+
+
+def unban_user(bot_token, guild_id, user_id):
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/bans/{user_id}"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+    }
+
+    response = requests.delete(url, headers=headers)
+    
+    if response.status_code == 204:
+        print(f"User {user_id} has been unbanned from guild {guild_id}.")
+    else:
+        print(f"Failed to unban user {user_id}. Status code: {response.status_code}")
+        print("Response:", response.json())
 
 
 # Bot events
@@ -574,49 +201,28 @@ async def on_command_completion(ctx):
 
 
 @bot.event
-async def on_dm(message):
-    author = message.author
-    guild = None
-
-    if message.content.lower().startswith("/mod_mail"):
-        is_banned = await is_user_banned(ban_collection, author.id)
-        is_kicked = await is_user_kicked(kick_collection, author.id)
-
-        if guild is not None and author in guild.members:
-            await handle_server_user_modmail(message, author)
-            return
-
-        if is_banned or not guild:
-            await handle_banned_user_modmail(message, author)
-            return
-        if is_kicked or not guild:
-            await handle_kicked_user_modmail(message, author)
-            return
-
-        await author.send(
-            "You are not currently in the server or banned/kicked. Mod Mail might be unavailable.",
-            ephemeral=True,
+async def on_member_remove(member):
+    member_leave = member_leave_collection.find_one(
+        {"_id": member.id}
+    )
+    if member_leave is None:
+        member_leave_collection.insert_one(
+            {"_id": member.id, "action": "removed", "timestamp": datetime.now()}
+        )
+    else:
+        member_leave_collection.update_one({"_id": member.id},
+            {"$set": {"action": "removed", "timestamp": datetime.now()} }
         )
 
 
 @bot.event
-async def on_member_ban(member):
-
-    await ban_collection.insert_one(
-        {"_id": member.id, "action": "banned", "timestamp": datetime.now()}
-    )
-
-
-@bot.event
-async def on_member_kick(member):
-
-    await kick_collection.insert_one(
-        {"_id": member.id, "action": "kicked", "timestamp": datetime.now()}
-    )
-
-
-@bot.event
 async def on_ready():
+    await bot.change_presence(
+        status=discord.Status.online,
+        activity=discord.Activity(
+            type=discord.ActivityType.listening,
+        ),
+    )
     print(f"{bot.user} has logged in")
 
 
@@ -640,42 +246,217 @@ async def check_level_up(channel, message, currency_collection):
         currency = user.get("currency", 0)
         log_message = f"{message.author.mention}"
         await channel.send(
-            f"Congratulations, {log_message}! You now have {currency} unit{'s' if  currency > 1 else ''} currency!"
+            f"Congratulations, {log_message}! You now have {currency} unit{'s' if  currency > 1 else ''} of currency!"
         )
 
 
 async def schedule_unban_task(
-    user_to_unban: discord.Member, guild: discord.Guild, unban_time: datetime
+    user_to_unban, guild, unban_time
 ):
 
-    delta = unban_time - datetime.now(datetime.timezone.utc)
-    delay = max(delta.total_seconds(), 0)
-    task = (delay, user_to_unban, guild)
+    task = (unban_time, user_to_unban, guild)
 
-    await unban_tasks.put(task)
+    unban_tasks.append(task)
     print(f"User {user_to_unban} scheduled for unban at {unban_time}")
 
+def signal_handler(signum, frame):
+    exit_event.set()
 
-@bot.event
-async def background_unban_task(interaction: discord.Interaction):
-    delay, user_to_unban, guild = await unban_tasks.get()
+def background_unban_task(bot):
+    while True:
+        if unban_tasks:
+            unban_time, user_to_unban, guild = unban_tasks[0]
+            delta = unban_time - datetime.now(timezone.utc)
+            guild_id = bot.guilds[0].id
+            user_id = user_to_unban.id
+            bot_token = config.get("BOT", "auth_token")
+            delay = max(delta.total_seconds(), 0)
+            unban_tasks.pop()
+            
+            if delay <= 0:
+                unban_user(bot_token, guild_id, user_id)
+                print(f"Unbanned user {user_to_unban} (scheduled task)")
+            else:
+                unban_tasks.append((unban_time, user_to_unban, guild))
 
-    if delay <= 0:
-        await interaction.guild.unban(user_to_unban)
-        print(f"Unbanned user {user_to_unban} (scheduled task)")
-    else:
-        await unban_tasks.put((delay, user_to_unban, guild))
+        time.sleep(5)
 
-    await asyncio.sleep(5)
+        if exit_event.is_set():
+            break
 
 
 @bot.event
 async def on_message(message):
     if message.author != bot.user:
+        try:
+            gd = await bot.fetch_guild(TESTING_GUILD_ID)
+            category1 = bot.get_channel(1233785738961879071)
+
+            #### TICKET CLOSE FUNCTION ####
+            if (
+                message.channel in category1.channels
+                and message.channel.id != 1233059905812955198
+                and message.author.id != 1221737230285144095
+                and message.content == "c.close"
+            ):
+                category = bot.get_channel(1233785738961879071)
+                ch = await bot.fetch_channel(1233059905812955198)
+                id = message.channel.topic
+                usr = await bot.fetch_user(id)
+
+                await message.channel.send("CLOSING TICKET ...")
+                await usr.send(
+                    f"**Greetings {usr.name}**\n```Your Ticket has been closed by our moderation team. If you want to contact us again , message in this channel once again. Note that, we don't accept any sort of trolling.```\n**Thank you**"
+                )
+                embed = discord.Embed(
+                    title="TICKET CLOSED",
+                    description=f"Ticket created by {usr.name} is closed by {message.author.name}.",
+                    color=0xFF0000,
+                )
+                embed2 = discord.Embed(
+                    title="TICKET CLOSED",
+                    description=f"Ticket created by {usr.name} is closed.",
+                    color=0xFF0000,
+                )
+                await ch.send(embed=embed)
+                await asyncio.sleep(3)
+                await usr.send(embed=embed2)
+                await message.channel.delete()
+                print("ticket close function")
+
+            #### MODERATOR REPLY FUNCTION ####
+            if (
+                message.channel in category1.channels
+                and message.channel.id != 1233059905812955198
+                and message.author.id != 1221737230285144095
+                and message.content != "c.close"
+            ):
+                usrid = message.channel.topic
+                usr = await bot.fetch_user(usrid)
+
+                if message.content == None:
+                    msg = "None"
+                else:
+                    msg = message.content
+
+                embed6 = discord.Embed(title="Message from TEAM", description=f"{msg}")
+                await usr.send(f"{msg}")
+                urls = []
+                for att in message.attachments:
+                    for i in range(len(urls)):
+                        urls[i].append(att.url)
+                    embed7 = discord.Embed(title="Attachment", color=0x75E6DA)
+                    embed7.set_image(url=f"{urls[0]}")
+                    await usr.send(embed=embed7)
+
+            if message.channel.type == discord.ChannelType.private:
+                if message.author.id != 1221737230285144095:
+
+                    #### CHECKING IF USER HAS ALREADY CREATED A TICKET ####
+                    topics = []
+                    a = None
+
+                    for mail_channel in category1.channels:
+                        topics.append(mail_channel.topic)
+                        if mail_channel.topic == str(message.author.id):
+                            a = mail_channel.id
+
+                    if f"{message.author.id}" in topics:
+                        chnl = await bot.fetch_channel(a)
+                        if message.content == None:
+                            msg = "None"
+                        else:
+                            msg = message.content
+                        embed3 = discord.Embed(title=f"Message from {message.author.name}", description=f"{msg}")
+                        await chnl.send(embed=embed3)
+                        urls = []
+                        for att in message.attachments:
+                            print("urls.append(att.url) the 2nd")
+                            urls.append(att.url)
+                        embed4 = discord.Embed(title="Attachment", color=0x75E6DA)
+                        if urls:
+                            embed4.set_image(url=f"{urls[0]}")
+                            await chnl.send(embed=embed4)
+
+                    else:
+                        options_select = [SelectOption(label="Text Abuse", description=""),
+                                          SelectOption(label="VC Abuse", description=""),
+                                          SelectOption(label="Ban/Kick Appeal", description=""),
+                                          SelectOption(label="Timeout Appeal", description=""),
+                                        ]
+
+                        select_menu = StringSelect(
+                            placeholder="Select a category of support",
+                            min_values=1,
+                            max_values=1,
+                            options=options_select,
+                        )
+
+                        async def select_cat(interaction: discord.Interaction):
+                            print("CREATING TEXT CHANNEL")
+                            ### CREATING TEXT CHANNEL ###
+
+                            m1 = await gd.create_text_channel(
+                                f"modmail-{message.author.name}",
+                                category=category1,
+                                topic=f"{message.author.id}",
+                            )
+
+                            ### SENDING USER A DM ###
+                            embed1 = discord.Embed(
+                                title=f"Greetings {message.author.name}",
+                                description="```New ticket has been created for you, send your messages in my DM, which will be sent to our Moderation team and they will respond to you soon.\n\nNote the following things:\n1) Emotes wont be visible to mods.\n2) If you have to send images send one by one.\n3) Make sure you dont send nsfw content or swear during the course of help.\n4) You cannot close a ticket, since there might be a chance of re-opening your ticket .\n5) Be respectful and follow discord TOS.\n6) The following messages will be from a MOD. ```\n**Thank you**",
+                                color=0x00FF00,
+                            )
+
+                            await message.author.send(embed=embed1)
+
+                            ### SEND TICKET CHANNEL A REMOTE MESSAGE FOR CLOSE ETC ###
+
+                            embed2 = discord.Embed(
+                                title=f"TICKET CREATED for {select_menu.values[0]}",
+                                description="Hey Mods \n```New ticket created,\nRemember that whatever you send in this channel henceforth will be sent to the user who created the ticket.```\n**Thank you**",
+                                color=0xFF0000,
+                            )
+
+                            timestamp = datetime.now()
+                            embed5 = discord.Embed(color=0xF1C0B9)
+                            embed5.add_field(
+                                name="**USER INFORMATION**",
+                                value=f'```USER NAME - {message.author.name}\n\nUSER ACCOUNT AGE - {round((time.time() - message.author.created_at.timestamp())/86400)} days\n\nTIME OF CREATION - {timestamp.strftime(r"%I:%M %p") } ```',
+                            )
+
+                            await m1.send(embed=embed2)
+                            await m1.send(embed=embed5)
+
+                            ### BOT LOGS ### WHERE THE LOGGINGS WILL TAKE PLACE
+
+                            ch = await bot.fetch_channel(1233059905812955198)
+
+                            embed = discord.Embed(
+                                title=f"TICKET CREATED for {select_menu.values[0]}",
+                                description=f"New ticket created by user {message.author.name} for support in {select_menu.values[0]} category, [CLICK ME](https://discord.com/channels/{gd.id}/{m1.id}) to access ticket",
+                                color=0x00FF00,
+                            )
+
+                            await ch.send(embed=embed)
+
+                        select_menu.callback = select_cat
+                        view = View()
+                        view.add_item(select_menu)
+
+                        await message.author.send(
+                            "Please select a category for your message:", view=view
+                        )
+
+        except Exception as e:
+            print(e)
+
         print(message.author, message.channel, message.content, message.embeds)
         await log_event(
             f"Message sent in {message.channel}", message.author, message.content
         )
+
         # Level and Currency System
         myquery = {"_id": message.author.id}
         if currency_collection.count_documents(myquery) == 0:
@@ -690,10 +471,9 @@ async def on_message(message):
         else:
             if "" in str(message.content.lower()):
                 query = {"_id": message.author.id}
-                user = currency_collection.find(query)
-                for result in user:
-                    old_score = result["score"]
-                    old_currency = result["currency"]
+                user = currency_collection.find_one(query)
+                old_score = user.get("score", 0)
+                old_currency = user.get("currency", 0)
                 score = old_score + 1
                 level = score // 100
                 currency = old_currency + 1
@@ -770,18 +550,22 @@ async def on_message(message):
     if author not in user_messages:
         user_messages[author.id] = []
     user_messages[author.id].append(message.content)
+    # print(user_messages)
 
-    potential_number = "".join(user_messages[author.id][-5:])
-    if re.match(phone_number_regex, potential_number):
-        await message.channel.delete_messages([message, user_messages[author.id][-2]])
-        user_messages[author.id].pop()
-        await message.channel.send(
-            f"Hey {author.mention}, please avoid sharing phone numbers in the chat."
-        )
-        user_messages[author.id].clear()
+    potential_number = "".join(user_messages[author.id][-2:1])
+    # print(potential_number)
 
-    if len(user_messages[author.id]) > 6:
-        user_messages[author.id] = user_messages[author.id][-6:]
+    if len(user_messages[author.id]) > 2:
+        if re.match(phone_number_regex, potential_number):
+            await message.channel.delete([message, user_messages[author.id][-2:1]])
+            user_messages[author.id].pop()
+            await message.channel.send(
+                f"Hey {author.mention}, please avoid sharing phone numbers in the chat."
+            )
+            user_messages[author.id].clear()
+
+    if len(user_messages[author.id]) > 3:
+        user_messages[author.id] = user_messages[author.id][-3:1]
 
 
 @bot.event
@@ -820,7 +604,9 @@ async def on_voice_state_update(member, before, after):
             and after.channel is None
         ):
             channel_id = after.channel.id if after.channel else before.channel.id
-            channel_name = after.channel.name if after.channel else before.channel.name
+            channel_name = (
+                after.channel.mention if after.channel else before.channel.mention
+            )
 
             if before.channel is None:
                 member_voice_times[(member, channel_id)] = datetime.now(timezone.utc)
@@ -838,27 +624,6 @@ async def on_voice_state_update(member, before, after):
                     await log_event(
                         "Voice Channel Left (Duration)", member, log_message
                     )
-
-    if member.id == bot.user.id:
-        return
-    voice = discord.utils.get(bot.voice_clients, guild=member.guild)
-    if voice is None:
-        return
-    voice_channel = voice.channel
-    member_count = len(voice_channel.members)
-    if member_count == 1:
-        await asyncio.sleep(30)
-        if member_count == 1:
-            await voice.disconnect()
-            guildid = member.guild.id
-            ctx = music_queue[guildid][0][4]
-            clear(ctx)
-            embed = discord.Embed(
-                title="Left voice channel, and cleared queue",
-                description="No one else in the voice channel :/",
-                color=colors["neutral"],
-            )
-            await ctx.send(embed=embed)
 
 
 @bot.event
@@ -897,43 +662,72 @@ async def on_reaction_add(reaction, user):
 
 
 @bot.slash_command(
-    name="get_currency",
+    name="get-currency",
     description="To show how much currency you have",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
 async def getCurrency(interaction: discord.Interaction):
     query = {"_id": interaction.user.id}
     user = currency_collection.find_one(query)
     currency = user.get("currency", 0) if user else 0
 
-    await interaction.send(f"You have {currency} currency", ephemeral=True)
+    await interaction.response.send_message(
+        f"You have {currency} currency", ephemeral=True
+    )
 
 
 @bot.slash_command(
-    name="get_level",
+    name="get-level",
     description="To show how many levels you gained",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
 async def getLevels(interaction: discord.Interaction):
     query = {"_id": interaction.user.id}
     user = currency_collection.find_one(query)
     level = user.get("level", 0) if user else 0
 
-    await interaction.send(f"You have reached level {level}", ephemeral=True)
+    await interaction.response.send_message(
+        f"You have reached level {level}", ephemeral=True
+    )
+
+
+@bot.slash_command(
+    name="leaderboard",
+    description="To show the leaderboard of the server.",
+    guild_ids=[TESTING_GUILD_ID],
+)
+async def leaderboard(interaction: discord.Interaction):
+    query = {"_id": interaction.user.id}
+    leaderboard_data = currency_collection.find().sort("score", -1)
+    message = "**Leaderboard:**\n"
+    position = 1
+    for document in leaderboard_data:
+        user_id = document["_id"]
+        user = interaction.guild.get_member(user_id)
+        if user is None:
+            currency_collection.delete_one({"_id": user_id})
+            continue
+        score = document["score"]
+        message += f"{position}. {user.name}: {score}\n"
+        position += 1
+
+    await interaction.response.send_message(
+        message, ephemeral=True
+    )
 
 
 @bot.slash_command(
     name="warn",
     description="Warns a user for breaking a rule.",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(kick_members=True)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(kick_members=True)
 async def warn_user(
     interaction: discord.Interaction, user: discord.Member, reason: str
 ):
 
-    warning_threshold = 3
+    warning_threshold = 5
 
     warn_data = {
         "guild_id": interaction.guild.id,
@@ -944,7 +738,7 @@ async def warn_user(
         "count": 1,
     }
     update_filter = {"guild_id": interaction.guild.id, "user_id": user.id}
-    update_ops = {"$inc": {"count": 1}}
+    update_ops = {"$set": {"reason": reason}, "$inc": {"count": 1}}
 
     if user is None:
         await interaction.response.send_message(
@@ -967,12 +761,14 @@ async def warn_user(
             )
         else:
             warn_collection.insert_one(warn_data)
-            warned_user = warn_collection.find_one(query)
+        warned_user = warn_collection.find_one(query)
         warning_count = warned_user.get("count", 0)
 
         if warning_count > warning_threshold:
             try:
+                await user.send(f"You have been banned from {interaction.guild.name} for: {reason}. And for crossing {warning_threshold} warnings threshold.")
                 await interaction.guild.ban(user)
+                warn_collection.delete_one(query)
                 await interaction.response.send_message(
                     f"{user.mention} has crossed the warning threshold and has been banned.",
                     ephemeral=True,
@@ -989,10 +785,9 @@ async def warn_user(
                 f"Warning has been sent.",
                 ephemeral=True,
             )
+            await user.send(f"You have been warned in {interaction.guild.name} for: {reason}. Crossing {warning_threshold} warnings threshold will ban you.")
 
-        await user.send(
-            f"You have been warned in {interaction.guild.name} for: {reason}. Meeting {warning_threshold} warnings threshold will ban you."
-        )
+        
     except discord.HTTPException as e:
         print(f"Failed to send DM to user: {e}")
         await interaction.response.send_message(
@@ -1007,15 +802,15 @@ async def warn_user(
 @bot.slash_command(
     name="kick",
     description="Kick a person from server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(kick_members=True)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(kick_members=True)
 async def memberKick(
     interaction: discord.Interaction,
-    user: discord.User = discord.SlashOption("kick", "Kick a user from server"),
+    user: discord.Member = discord.SlashOption("kick", "Kick a user from server"),
     reason: str = discord.SlashOption(
-        "reason", "Provide a reason to kick the selected user"
+        name="reason", description="Provide a reason to kick the selected user", required=False
     ),
 ):
     if user is None:
@@ -1023,27 +818,29 @@ async def memberKick(
             "Please specify a valid user to kick.", ephemeral=True
         )
         return
+    if reason is None:
+        reason = "no reason provided"
     await interaction.guild.kick(user, reason=reason)
-    await interaction.send(f"{user} has been kicked", ephemeral=True)
+    await interaction.send(f"{user} has been kicked: {reason}", ephemeral=True)
 
 
 @bot.slash_command(
     name="ban",
     description="Ban a person from server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(ban_members=True)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(ban_members=True)
 async def memberBan(
     interaction: discord.Interaction,
     user: discord.User = discord.SlashOption("ban", "Ban a user from server"),
-    delete_message_days: int = discord.SlashOption(
-        "delete_message_days",
-        "Delete this user's previous messages up to",
-        required=False,
-    ),
     reason: str = discord.SlashOption(
-        "reason", "Provide a reason to ban the selected user"
+        name="reason", description="Provide a reason to ban the selected user"
+    ),
+    delete_message_days: int = discord.SlashOption(
+        name="delete-message-days",
+        description="Delete this user's previous messages up to",
+        required=False,
     ),
 ):
     if user is None:
@@ -1058,27 +855,24 @@ async def memberBan(
 
 
 @bot.slash_command(
-    name="temp_ban",
+    name="temp-ban",
     description="Temporarily ban a person from server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(ban_members=True)
-async def memberTempBan(
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(ban_members=True)
+async def tempBan(
     interaction: discord.Interaction,
-    user: discord.User = discord.SlashOption("ban", "ban a user from server"),
+    user: discord.User = discord.SlashOption(
+        name="temp-ban", description="temporarily ban a user from server"
+    ),
+    reason: str = discord.SlashOption(
+        name="reason", description="provide a reason to ban the selected user", required=False,
+    ),
     duration: int = discord.SlashOption(
         name="duration",
         description="Ban duration in days (default: 10 days)",
-        required=False,
-    ),
-    delete_message_days: int = discord.SlashOption(
-        "delete_message_days",
-        "delete this user's previous messages upto",
-        required=False,
-    ),
-    reason: str = discord.SlashOption(
-        "reason", "provide a reason to ban the selected user"
+        required = False,
     ),
 ):
     if user is None:
@@ -1090,23 +884,20 @@ async def memberTempBan(
     if not duration:
         duration = 10
 
-    unban_time = datetime.now(datetime.timezone.utc) + timedelta(days=duration)
+    unban_time = datetime.now(timezone.utc) + timedelta(seconds=duration)
 
     reason_with_time = (
         f"Temporarily banned {user} (unban at {unban_time.strftime('%H:%M:%S %Z')})"
     )
     if reason:
         reason_with_time += f" Reason: {reason}"
-    await user.ban(reason=reason_with_time)
+        await interaction.guild.ban(user, reason=reason_with_time)
+    else:
+        await interaction.guild.ban(user, reason=None)
 
     await schedule_unban_task(user, guild, unban_time)
-
     await interaction.response.send_message(
         f"Temporarily banned {user.name} for {duration} day(s)."
-    )
-
-    await guild.ban(
-        user, duration, delete_message_days=delete_message_days, reason=reason
     )
     await interaction.send(f"{user} has been banned temporarily.", ephemeral=True)
 
@@ -1114,15 +905,15 @@ async def memberTempBan(
 @bot.slash_command(
     name="unban",
     description="Unban a person from server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(ban_members=True)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(ban_members=True)
 async def memberUnban(
     interaction: discord.Interaction,
     user: str = discord.SlashOption("unban", "Unban a user from server"),
     reason: str = discord.SlashOption(
-        "reason", "Provide a reason to unban the selected user"
+        name="reason", description="Provide a reason to unban the selected user"
     ),
 ):
     if user is None:
@@ -1137,20 +928,20 @@ async def memberUnban(
 @bot.slash_command(
     name="timeout",
     description="Timeout/Mute a person in server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(mute_members=True)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(mute_members=True)
 async def memberMute(
     interaction: discord.Interaction,
-    timeout: int = discord.SlashOption(
-        "timeout", "Provide an amount of time to mute in minutes"
-    ),
     user: discord.Member = discord.SlashOption(
-        "user", "Timeout a user in minutes in server"
+        name="user", description="Timeout a user in minutes in server"
+    ),
+    timeout: int = discord.SlashOption(
+        name="timeout", description="Provide an amount of time to mute in minutes"
     ),
     reason: str = discord.SlashOption(
-        "reason", "Provide a reason to timeout the selected user"
+        name="reason", description="Provide a reason to timeout the selected user"
     ),
 ):
     if user is None:
@@ -1166,10 +957,10 @@ async def memberMute(
 @bot.slash_command(
     name="nickname",
     description="Nickname a person in server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_permissions(manage_nicknames=True)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_guild_permissions(manage_nicknames=True)
 async def changeNick(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
@@ -1189,11 +980,11 @@ async def changeNick(
 
 
 @bot.slash_command(
-    name="give_admin",
+    name="give-admin",
     description="Give Administrator Permissions to a person in server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
+@commands.has_guild_permissions(administrator=True)
 @application_checks.has_guild_permissions(administrator=True)
 async def GiveAdmin(
     interaction: discord.Interaction,
@@ -1219,37 +1010,86 @@ async def GiveAdmin(
 
 
 @bot.slash_command(
-    name="change_roles",
+    name="add-roles",
     description="Manage roles of a person in server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_guild_permissions(manage_roles=True)
-async def manageRoles(
+@commands.has_guild_permissions(administrator=True)
+async def addRoles(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
         "user", "Select a user to manage their roles in server"
     ),
-    manage_roles: discord.Role = discord.SlashOption(
-        "roles", "Manage roles for the selected user"
+    add_roles: discord.Role = discord.SlashOption(
+        "roles", "Add roles for the selected user"
     ),
 ):
+    if add_roles.position > interaction.guild.me.top_role.position:
+        await interaction.response.send_message(
+            "I can't add roles higher than my own position!", ephemeral=True
+        )
+        return
     if user is None:
         await interaction.response.send_message(
             "Please specify a valid user to change roles.", ephemeral=True
         )
         return
-    await user.edit(roles=[manage_roles])
-    await interaction.send(f"Roles have been updated for {user}", ephemeral=True)
+    if add_roles.position < interaction.user.top_role.position:
+        await user.add_roles(add_roles)
+        await interaction.response.send_message(
+            f"Role {add_roles} has been added to {user}.", ephemeral=True
+        )
+        return
+    else:
+        await interaction.response.send_message(
+            "You cannot add roles higher than or equal to your own.", ephemeral=True
+        )
 
 
 @bot.slash_command(
-    name="ping_role",
-    description="Pings a role in the server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    name="remove-roles",
+    description="Manage roles of a person in server",
+    guild_ids=[TESTING_GUILD_ID],
 )
-@commands.has_permissions(administrator=True)
-@application_checks.has_guild_permissions(manage_roles=True)
+@commands.has_guild_permissions(administrator=True)
+async def removeRoles(
+    interaction: discord.Interaction,
+    user: discord.Member = discord.SlashOption(
+        "user", "Select a user to manage their roles in server"
+    ),
+    remove_roles: discord.Role = discord.SlashOption(
+        "roles", "Remove roles for the selected user"
+    ),
+):
+    if remove_roles.position > interaction.guild.me.top_role.position:
+        await interaction.response.send_message(
+            "I can't add roles higher than my own position!", ephemeral=True
+        )
+        return
+    if user is None:
+        await interaction.response.send_message(
+            "Please specify a valid user to change roles.", ephemeral=True
+        )
+        return
+    if remove_roles.position < interaction.user.top_role.position:
+        await user.remove_roles(remove_roles)
+        await interaction.response.send_message(
+            f"Role {remove_roles} has been removed from {user}.", ephemeral=True
+        )
+        return
+    else:
+        await interaction.response.send_message(
+            "You cannot remove roles higher than or equal to your own.", ephemeral=True
+        )
+
+
+@bot.slash_command(
+    name="ping-role",
+    description="Pings a role in the server",
+    guild_ids=[TESTING_GUILD_ID],
+)
+@commands.has_guild_permissions(administrator=True)
+@application_checks.has_permissions(manage_roles=True)
 async def pingRole(
     interaction: discord.Interaction,
     role: discord.Role = discord.SlashOption("role", "Select a role to ping"),
@@ -1268,46 +1108,11 @@ async def pingRole(
 
 
 @bot.slash_command(
-    name="mod_mail",
-    description="File a ticket to moderators for support.",
-)
-async def open_modmail(
-    interaction: discord.Interaction,
-    mod_role_name: discord.Role = discord.SlashOption(
-        "category", "Select a category of support"
-    ),
-):
-    user = interaction.user
-    guild = interaction.guild
-    query = {"_id": interaction.user.id}
-    banned_user = ban_collection.find_one(query)
-    kicked_user = kick_collection.find_one(query)
-    banned_members = banned_user.get("_id") == interaction.user.id
-    kicked_members = kicked_user.get("_id") == interaction.user.id
-
-    if guild is not None and user in guild.members:
-        await handle_server_user_modmail(interaction, user, mod_role_name)
-        return
-
-    if user in banned_members:
-        await handle_banned_user_modmail(interaction, user, mod_role_name)
-        return
-
-    if user in kicked_members:
-        await handle_kicked_user_modmail(interaction, user, mod_role_name)
-        return
-
-    await interaction.response.send_message(
-        "You are not currently in the server or banned/kicked. Mod Mail might be unavailable.",
-        ephemeral=True,
-    )
-
-
-@bot.slash_command(
-    name="create_vc",
+    name="create-vc",
     description="Create a private voice channel in the server.",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
+@commands.has_guild_permissions(administrator=True)
 async def createVoice(
     interaction: discord.Interaction,
     create_voice: str = discord.SlashOption("name", "Give a name for the Text Channel"),
@@ -1319,15 +1124,27 @@ async def createVoice(
     user = currency_collection.find_one(query)
     currency = user.get("currency", 0) if user else 0
     guild = interaction.guild
+    overwrites = {
+        interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user: discord.PermissionOverwrite(
+            manage_channels=True,
+            mute_members=True,
+            move_members=True,
+            deafen_members=True,
+            view_channel=True,
+        ),
+    }
     if currency >= 10:
         currency_collection.update_one(query, {"$set": {"currency": currency - 10}})
 
         voice_channel = await guild.create_voice_channel(
-            name=create_voice, user_limit=user_limit
+            name=create_voice,
+            user_limit=user_limit,
+            overwrites=overwrites,
         )
 
         await interaction.response.send_message(
-            f"{voice_channel.name} voice channel has been created with a limit of {user_limit} users.",
+            f"{voice_channel.mention} voice channel has been created with a limit of {user_limit} users. Click on the name to join it.",
             ephemeral=True,
         )
     else:
@@ -1337,10 +1154,11 @@ async def createVoice(
 
 
 @bot.slash_command(
-    name="find_in_vc",
+    name="find-in-vc",
     description="Find in which VC a user is in.",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
+@commands.has_guild_permissions(administrator=True)
 async def findInVc(
     interaction: discord.Interaction,
     user: discord.Member = discord.SlashOption(
@@ -1359,7 +1177,7 @@ async def findInVc(
         for member in voice_channel.members:
             if member == user:
                 await interaction.response.send_message(
-                    f"Found {user.name} in voice channel: {voice_channel.name}",
+                    f"Found {user.name} in voice channel: {voice_channel.mention}",
                     ephemeral=True,
                 )
                 return
@@ -1369,9 +1187,9 @@ async def findInVc(
 
 
 @bot.slash_command(
-    name="vc_drag",
+    name="vc-drag",
     description="Drag a person to a voice channel in server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
 @commands.has_guild_permissions(administrator=True)
 @application_checks.has_guild_permissions(move_members=True)
@@ -1394,136 +1212,102 @@ async def voiceDrag(
 
 
 @bot.slash_command(
-    name="request_vc_drag",
+    name="request-vc-drag",
     description="Ask a mod for a drag request.",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
+@commands.has_guild_permissions(administrator=True)
 async def dragMe(
-    interaction: discord.Interaction,
-    role: discord.Role = discord.SlashOption(
-        "mod_role", "Select a mod role to help you drag into a VC"
-    ),
-    change_vc: discord.VoiceChannel = discord.SlashOption(
+    interactor: discord.Interaction,
+    user_name: discord.Member = discord.SlashOption(
         "drag", "Change VC for the selected user"
     ),
 ):
 
-    if interaction.user.voice:
-        if interaction.user.voice.channel == change_vc:
-            await interaction.response.send_message(
+    if interactor.user.voice:
+        if interactor.user.voice.channel == user_name.voice.channel:
+            await interactor.response.send_message(
                 "You're already in the same voice channel as that user!", ephemeral=True
             )
             return
 
-        new_request = {
-            "requester_id": interaction.user.id,
-            "role_id": role.id,
-            "requested_channel_id": change_vc.id,
-            "timestamp": datetime.now(),
-        }
-        drag_request_collection.insert_one(new_request)
+        else:
+            embed = discord.Embed(
+                title=f"{interactor.user.name} wants to be dragged!",
+                description=f"{interactor.user.name} has requested to join your voice channel ({user_name.voice.channel.name}).",
+                color=0x00FFFF,
+            )
+            embed1 = discord.Embed(
+                title=f"{interactor.user.name} has been dragged!",
+                description=f"{user_name} has has accepted the request.",
+                color=0x00FFFF,
+            )
+            view1 = View()
+            embed2 = discord.Embed(
+                title=f"{interactor.user.name} has been rejected to be dragged!",
+                description=f"{user_name} has has rejected the request.",
+                color=0x00FFFF,
+            )
+            accept_button = Button(label="Accept", style=discord.ButtonStyle.green)
+            reject_button = Button(label="Reject", style=discord.ButtonStyle.red)
 
-        mod_channel = bot.get_channel(MOD_CHANNEL_ID)
-        await interaction.response.send_message(
-            f"You requested to be dragged to {change_vc.name} voice channel. Please wait for a moderator's approval.",
-            ephemeral=True,
-        )
-        await mod_channel.send(
-            f"{role.mention}.{interaction.user.name} has requested to be dragged to {change_vc.name} voice channel. Approve with `/acceptdrag {interaction.user.name}` or deny with `/denydrag {interaction.user.name}`."
-        )
+            async def accept_callback(interaction):
+                if interaction.user.id != user_name.id:
+                    await interaction.response.send_message(
+                        "You can't accept this request!", ephemeral=True
+                    )
+                    return
+
+                try:
+                    await interactor.user.move_to(user_name.voice.channel)
+                    await interaction.response.send_message(
+                        f"Dragged {interactor.user.name} into your voice channel!",
+                        ephemeral=True,
+                    )
+                    await interactor.edit_original_message(embed=embed1, view=view1)
+                except discord.errors.HTTPException as e:
+                    await interaction.response.send_message(
+                        f"Failed to drag {interactor.user.name}: {e}", ephemeral=True
+                    )
+
+            async def reject_callback(interaction):
+                if interaction.user.id != user_name.id:
+                    await interaction.response.send_message(
+                        "You can't reject this request!", ephemeral=True
+                    )
+                    return
+                await interaction.response.send_message(
+                    f"{user_name.name} has rejected the drag request."
+                )
+                await interactor.edit_original_message(embed=embed2, view=view1)
+
+            accept_button.callback = accept_callback
+            reject_button.callback = reject_callback
+
+            view = View()
+            view.add_item(accept_button)
+            view.add_item(reject_button)
+
+            await interactor.response.send_message(embed=embed, view=view)
+
     else:
-        await interaction.response.send_message(
+        await interactor.response.send_message(
             "You're not in any voice channels.", ephemeral=True
         )
 
 
 @bot.slash_command(
-    name="accept_vc_drag",
-    description="Move a user to a voice channel (requires Move Members permission)",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
-)
-@commands.has_permissions(manage_channels=True)
-@application_checks.has_guild_permissions(move_members=True)
-async def acceptdrag(
-    interaction: discord.Interaction,
-    user: discord.Member,
-    change_vc: discord.VoiceChannel = discord.SlashOption(
-        "vc", "Select a voice channel to move the user to"
-    ),
-):
-    request_doc = drag_request_collection.find_one({"requester_id": user.id})
-    if not request_doc:
-        await interaction.response.send_message(
-            f"{user.name} has no pending drag request."
-        )
-        return
-
-    requester_user_id = request_doc["requester_id"]
-    requester_user = interaction.guild.get_member(requester_user_id)
-
-    if not requester_user:
-        await interaction.response.send_message(
-            f"Could not find the user who requested to be dragged {change_vc.name}voice channel.",
-            ephemeral=True,
-        )
-        drag_request_collection.delete_one(
-            {"requester_id": request_doc["requester_id"]}
-        )
-        return
-
-    try:
-        await requester_user.move_to(change_vc)
-        await interaction.response.send_message(
-            f"{requester_user.name} has been dragged to {change_vc.name}.",
-            ephemeral=True,
-        )
-        await interaction.channel.send(
-            f"{requester_user.mention} You have been dragged to {change_vc.name}."
-        )
-        drag_request_collection.delete_one(
-            {"requester_id": request_doc["requester_id"]}
-        )
-    except discord.HTTPException as e:
-        await interaction.response.send_message(
-            f"Failed to move {requester_user.name} to {change_vc.name}. (Error: {e})",
-            ephemeral=True,
-        )
-
-
-@bot.slash_command(
-    name="deny_vc_drag",
-    description="Deny a user's drag request (requires Move Members permission)",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
-)
-@commands.has_permissions(manage_channels=True)
-@application_checks.has_guild_permissions(move_members=True)
-async def denydrag(interaction: discord.Interaction, user: discord.Member):
-    request_doc = drag_request_collection.find_one({"requester_id": user.id})
-    if not request_doc:
-        await interaction.response.send_message(
-            f"{user.name} has no pending drag request."
-        )
-        return
-
-    drag_request_collection.delete_one({"requester_id": request_doc["requester_id"]})
-    await interaction.response.send_message(
-        f"{user.name}'s drag request has been denied.", ephemeral=True
-    )
-    await interaction.channel.send(f"{user.mention} Your drag request has been denied.")
-
-
-@bot.slash_command(
     name="help",
     description="Shows a list of all slash commands in the server",
-    guild_ids=[config.getint("GUILD", "testing_guild_id")],
+    guild_ids=[TESTING_GUILD_ID],
 )
 @commands.has_guild_permissions(administrator=True)
 async def help(interaction: discord.Interaction):
     embed = discord.Embed(title="My Commands")
 
     ban_desc = "To ban a user from the server."
-    # tempBan_desc = "To ban a user temporarily from the server."
-    # unban_desc = "To unban a user from the server."
+    tempBan_desc = "To ban a user temporarily from the server."
+    unban_desc = "To unban a user from the server."
     kick_desc = "To kick a user from the server."
     warn_desc = "To warn a user in the server."
     timeout_desc = "To timeout/mute a user in the server."
@@ -1533,8 +1317,6 @@ async def help(interaction: discord.Interaction):
     ping_desc = "To ping a role in the server."
     drag_desc = "To drag a user between VCs in the server."
     dragReq_desc = "To send a drag request for VCs in the server."
-    dragAccept_desc = "To accept a drag request of a user in the server."
-    dragDeny_desc = "To deny a drag request of a user in the server."
     findVc_desc = "To find which VC a user is in."
     modMail_desc = "To open a modmail ticket for support from moderators."
     currency_desc = "To show how much currency you have."
@@ -1545,10 +1327,11 @@ async def help(interaction: discord.Interaction):
     resume_desc = "To resume music using the music bot."
     skip_desc = "To skip music using the music bot."
     disconnect_desc = "To disconnect the music bot."
+    queue_desc = "To show the music queue of the bot."
 
     embed.add_field(name="`/ban`", value=ban_desc, inline=False)
-    # embed.add_field(name="`/temp_ban`", value=tempBan_desc, inline=False)
-    # embed.add_field(name="`/unban`", value=unban_desc, inline=False)
+    embed.add_field(name="`/temp_ban`", value=tempBan_desc, inline=False)
+    embed.add_field(name="`/unban`", value=unban_desc, inline=False)
     embed.add_field(name="`/kick`", value=kick_desc, inline=False)
     embed.add_field(name="`/warn`", value=warn_desc, inline=False)
     embed.add_field(name="`/timeout`", value=timeout_desc, inline=False)
@@ -1558,8 +1341,6 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="`/ping_role`", value=ping_desc, inline=False)
     embed.add_field(name="`/vc_drag`", value=drag_desc, inline=False)
     embed.add_field(name="`/request_vc_drag`", value=dragReq_desc, inline=False)
-    embed.add_field(name="`/accept_vc_drag`", value=dragAccept_desc, inline=False)
-    embed.add_field(name="`/deny_vc_drag`", value=dragDeny_desc, inline=False)
     embed.add_field(name="`/mod_mail`", value=modMail_desc, inline=False)
     embed.add_field(name="`/find_in_vc`", value=findVc_desc, inline=False)
     embed.add_field(name="`/get_currency`", value=currency_desc, inline=False)
@@ -1573,178 +1354,20 @@ async def help(interaction: discord.Interaction):
     embed.add_field(name="`c.pause`", value=pause_desc, inline=False)
     embed.add_field(name="`c.resume or c.r`", value=resume_desc, inline=False)
     embed.add_field(name="`c.skip`", value=skip_desc, inline=False)
+    embed.add_field(name="`c.queue`", value=queue_desc, inline=False)
     embed.add_field(
-        name="`c.disconnect or c.dc or c.boot or c.stop`",
+        name="`c.disconnect or c.dc or c.boot or c.stop or c.leave or c.end`",
         value=disconnect_desc,
         inline=False,
     )
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-# Music functions
-
-
-def delete_songs(temp_dir):
-    for file in os.listdir(temp_dir):
-        if file.endswith(".mp3"):
-            os.remove(os.path.join(temp_dir, file))
+signal.signal(signal.SIGINT, signal_handler)
 
 
-def get_youtube_url(search_term, result_index=0):
-    results = Search(search_term).results
-    if results:
-        return results[result_index].watch_url
-    else:
-        return None
-
-
-async def play_queue(ctx, url):
-    global music_queue
-    global disconnect_now
-    global is_looping
-
-    while music_queue:
-        url = music_queue.popleft()
-
-        try:
-            source = discord.FFmpegAudio(url)
-            ctx.voice_client.play(source)
-            await source.wait_for_end()
-
-            if is_looping and music_queue:
-                music_queue.extend(music_queue)
-
-        except Exception as e:
-            print(f"Error playing song: {e}")
-            await ctx.send(f"An error occurred while playing {url}. Skipping...")
-            await asyncio.sleep(5)
-
-    if not music_queue:
-        await ctx.voice_client.disconnect()
-        music_queue = deque()
-
-
-# Music bot commands
-
-
-@bot.command(name="play", aliases=["connect", "join", "next", "add", "p"])
-async def command_play(ctx, *arg):
-    await playsong(ctx, arg)
-
-
-@bot.command(name="resume", aliases=["r"])
-async def resume(ctx):
-    if ctx.guild.voice_client and ctx.guild.voice_client.is_connected():
-        ctx.voice_client.resume()
-        await ctx.send("Playback resumed.")
-    else:
-        await ctx.send(
-            "Not connected to a voice channel or no song was previously playing."
-        )
-
-
-@bot.command(name="pause")
-async def pause(ctx):
-    ctx.voice_client.pause()
-    await ctx.send("Playback paused.")
-
-
-@bot.command(name="disconnect", aliases=["dc", "boot", "stop", "leave", "end"])
-async def command_stop(ctx):
-    voice = ctx.channel.guild.voice_client
-    if voice is not None:
-        await clear(ctx)
-        await voice.disconnect()
-        embed = discord.Embed(
-            title="Stopped playing music, and cleared song queue",
-            color=colors["success"],
-        )
-    else:
-        embed = discord.Embed(title="Bot not in a voice channel", color=colors["error"])
-    await ctx.send(embed=embed)
-
-
-@bot.command(name="skip")
-async def command_skip(ctx, pos: int = 0):
-    await skip(ctx, pos)
-
-
-is_looping = False
-
-
-@bot.command(name="loop", aliases=["loopqueue", "lq"])
-async def loop(ctx):
-
-    global is_looping
-    is_looping = not is_looping
-    await ctx.send(f"Song Looping: {'Enabled' if is_looping else 'Disabled'}")
-
-
-@bot.command(name="queue", aliases=["q", "list", "l"])
-async def command_queue(ctx):
-    guild_id = TESTING_GUILD_ID
-    if guild_id not in music_queue.keys():
-        music_queue[guild_id] = []
-    np = await now_playing(ctx)
-    if np != None:
-        description = "**Now playing:** " + np[3]
-    else:
-        description = ""
-    embed = discord.Embed(
-        title="Song Queue", description=description, color=colors["neutral"]
-    )
-    if len(music_queue[guild_id]) > 1:
-        for i in music_queue[guild_id]:
-            if i == music_queue[guild_id][0]:
-                continue
-            id = music_queue[guild_id].index(i)
-            embed.add_field(
-                name=str(id) + ". " + i[3],
-                value=f"-------------------------------",
-                inline=False,
-            )
-    else:
-        embed.add_field(
-            name="No songs in queue",
-            value="songs are added automatically to queue when there is already a song playing",
-            inline=False,
-        )
-    await ctx.send(embed=embed)
-
-
-@bot.command(
-    name="now_playing", aliases=["np", "current_song", "currently_playing", "cs", "cp"]
-)
-async def now_playing(ctx):
-    guild_id = TESTING_GUILD_ID
-    if TESTING_GUILD_ID not in music_queue.keys():
-        music_queue[guild_id] = []
-    voice = ctx.channel.guild.voice_client
-    if voice is None:
-        return None
-    if voice.is_playing():
-        return music_queue[guild_id][0]
-
-
-@bot.command(name="clear", aliases=["clear_queue", "cq"])
-async def clear(ctx):
-    guild_id = TESTING_GUILD_ID
-    music_queue[guild_id] = []
-    await ctx.send("Queue has been cleared.")
-    return None
-
-
-@bot.command(name="remove", aliases=["remove_song", "rm"])
-async def remove(ctx, id):
-    print(type(id))
-    if TESTING_GUILD_ID not in music_queue.keys():
-        music_queue[TESTING_GUILD_ID] = []
-    await music_queue[TESTING_GUILD_ID].pop(id)
-    if id is None:
-        await ctx.send("Give a number as to which song to delete.")
-    await ctx.send("Song has been removed.")
-    return None
-
+t1 = threading.Thread(target=background_unban_task, args=(bot,))
+t1.start()
 
 bot.run(config.get("BOT", "auth_token"))
+t1.join()
