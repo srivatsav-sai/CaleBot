@@ -217,7 +217,12 @@ async def on_member_remove(member):
     member_leave = member_leave_collection.find_one({"_id": member.id})
     if member_leave is None:
         member_leave_collection.insert_one(
-            {"_id": member.id, "name": member.name, "action": "removed", "timestamp": datetime.now()}
+            {
+                "_id": member.id,
+                "name": member.name,
+                "action": "removed",
+                "timestamp": datetime.now(),
+            }
         )
     else:
         member_leave_collection.update_one(
@@ -394,7 +399,7 @@ async def on_message(message):
                         async def select_cat(interaction: discord.Interaction):
                             await interaction.edit(view=view1)
                             await message.author.send(
-                            f"You have selected {select_menu.values[0]} category."
+                                f"You have selected {select_menu.values[0]} category."
                             )
                             ### CREATING TEXT CHANNEL ###
 
@@ -417,10 +422,12 @@ async def on_message(message):
                             guild_roles = await gd.fetch_roles()
                             x = None
                             for selected_role in guild_roles:
-                                if str(selected_role).lower() == select_menu.values[0].lower():
+                                if (
+                                    str(selected_role).lower()
+                                    == select_menu.values[0].lower()
+                                ):
                                     x = selected_role
                                     break
-
 
                             embed2 = discord.Embed(
                                 title=f"TICKET CREATED for {select_menu.values[0]}",
@@ -455,29 +462,37 @@ async def on_message(message):
                             await ch.send(embed=embed)
 
                         select_menu.callback = select_cat
-                        
+
                         view = View()
                         view.add_item(select_menu)
 
                         await message.author.send(
-                        "Please select a category for your message:", view=view
+                            "Please select a category for your message:", view=view
                         )
 
         except Exception as e:
             print(e)
         if message.channel.category_id == MOD_MAIL_CATEGORY:
             await log_event(
-                f"Message sent in {message.channel}", message.author, message.content, MOD_MAIL_LOG
+                f"Message sent in {message.channel}",
+                message.author,
+                message.content,
+                MOD_MAIL_LOG,
             )
         if message.channel.category_id == MESSAGE_CATEGORY:
             await log_event(
-                f"Message sent in {message.channel}", message.author, message.content, MESSAGE_LOG
+                f"Message sent in {message.channel}",
+                message.author,
+                message.content,
+                MESSAGE_LOG,
             )
         if message.channel.category_id in (VOICE_CATEGORY, PRIVATE_VC_CATEGORY):
             await log_event(
-                f"Message sent in {message.channel}", message.author, message.content, VOICE_LOG
+                f"Message sent in {message.channel}",
+                message.author,
+                message.content,
+                VOICE_LOG,
             )
-
 
         # Level and Currency System
 
@@ -499,14 +514,14 @@ async def on_message(message):
             new_level = old_level
             new_currency = old_currency
             new_score = old_score + 1
-            base_value = old_level*5 + 10
-            variable_level = int(new_score/base_value)
+            base_value = old_level * 5 + 10
+            variable_level = int(new_score / base_value)
             if variable_level > old_level:
                 new_level = variable_level
-                new_currency = new_level*10 + old_currency
+                new_currency = new_level * 10 + old_currency
                 await message.channel.send(
                     f"Congratulations, {message.author.mention}! You have reached level {new_level}!"
-                )             
+                )
             currency_collection.update_one(
                 query,
                 {
@@ -552,7 +567,7 @@ async def on_message(message):
             message_cooldowns[author] = current_time
 
         if author in user_cooldowns:
-            
+
             if current_time - user_cooldowns[author][0] < USER_COOLDOWN:
                 if len(user_cooldowns[author]) >= MAX_MESSAGES_PER_BURST:
                     await message.delete()
@@ -584,10 +599,10 @@ async def on_message(message):
         potential_number = "".join(user_messages[author.id][-2:])
 
         if re.match(phone_number_regex, potential_number):
-                await message.channel.delete_messages(messages[author.id])
-                await message.channel.send(
-                    f"Hey {author.mention}, please avoid sharing phone numbers in the chat."
-                )
+            await message.channel.delete_messages(messages[author.id])
+            await message.channel.send(
+                f"Hey {author.mention}, please avoid sharing phone numbers in the chat."
+            )
 
         if len(user_messages[author.id]) >= 2:
             user_messages[author.id].pop(0)
@@ -600,7 +615,7 @@ async def on_message_delete(message):
             f"Message Deleted from {message.channel.name}",
             message.author,
             message.content,
-            MESSAGE_LOG
+            MESSAGE_LOG,
         )
 
 
@@ -612,7 +627,7 @@ async def on_message_edit(before, after):
             f"Message Edited in {channel_name}",
             before.author,
             f"**Before:** {before.content}\n**After:** {after.content}",
-            MESSAGE_LOG
+            MESSAGE_LOG,
         )
 
 
@@ -630,7 +645,7 @@ async def on_voice_state_update(member, before, after):
                     "Voice Channel Joined",
                     member,
                     f"{member.mention} joined voice channel: {channel_name}",
-                    VOICE_LOG
+                    VOICE_LOG,
                 )
         else:
             channel_name = before.channel.mention
@@ -645,7 +660,9 @@ async def on_voice_state_update(member, before, after):
             else:
                 after_channel = after.channel.mention
                 log_message = f"{member.mention} stayed in {channel_name} for {strfdelta(delta,'%H Hours %M Minutes %S Seconds')} before jumping to {after_channel}."
-                await log_event("Voice Channel Switched", member, log_message, VOICE_LOG)
+                await log_event(
+                    "Voice Channel Switched", member, log_message, VOICE_LOG
+                )
 
 
 @bot.event
@@ -955,7 +972,9 @@ async def memberUnban(
         return
     else:
         unban_user(bot_token, guild_id, user_id)
-        await interaction.response.send_message(f"{user} has been unbanned", ephemeral=True)
+        await interaction.response.send_message(
+            f"{user} has been unbanned", ephemeral=True
+        )
 
 
 @bot.slash_command(
@@ -1059,25 +1078,17 @@ async def addRoles(
     ),
 ):
     if add_roles.position > ctx.guild.me.top_role.position:
-        await ctx.send(
-            "I can't add roles higher than my own position!"
-        )
+        await ctx.send("I can't add roles higher than my own position!")
         return
     if user is None:
-        await ctx.send(
-            "Please specify a valid user to change roles."
-        )
+        await ctx.send("Please specify a valid user to change roles.")
         return
     if add_roles.position < ctx.author.top_role.position:
         await user.add_roles(add_roles)
-        await ctx.send(
-            f"Role: {add_roles} has been added to {user.mention}."
-        )
+        await ctx.send(f"Role: {add_roles} has been added to {user.mention}.")
         return
     else:
-        await ctx.send(
-            "You cannot add roles higher than or equal to your own."
-        )
+        await ctx.send("You cannot add roles higher than or equal to your own.")
 
 
 @bot.slash_command(
@@ -1151,9 +1162,6 @@ async def pingRole(
 async def createVoice(
     interaction: discord.Interaction,
     create_voice: str = discord.SlashOption("name", "Give a name for the Text Channel"),
-    user_limit: int = discord.SlashOption(
-        "limit", "Set a limit to how many users can join the Voice Channel"
-    ),
 ):
     query = {"_id": interaction.user.id}
     user = currency_collection.find_one(query)
@@ -1174,12 +1182,11 @@ async def createVoice(
 
         voice_channel = await guild.create_voice_channel(
             name=create_voice,
-            user_limit=user_limit,
             overwrites=overwrites,
         )
 
         await interaction.response.send_message(
-            f"{voice_channel.mention} voice channel has been created with a limit of {user_limit} users. Click on the name to join it.",
+            f"{voice_channel.mention} voice channel has been created. Click on the name to join it.",
             ephemeral=True,
         )
     else:
