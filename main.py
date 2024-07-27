@@ -162,6 +162,21 @@ def strip_url(url):
     return url
 
 
+def ban_user(bot_token, guild_id, user_id):
+    url = f"https://discord.com/api/v10/guilds/{guild_id}/bans/{user_id}"
+    headers = {
+        "Authorization": f"Bot {bot_token}",
+    }
+
+    response = requests.put(url, headers=headers)
+
+    if response.status_code == 204:
+        print(f"User {user_id} has been banned from guild {guild_id}.")
+    else:
+        print(f"Failed to ban user {user_id}. Status code: {response.status_code}")
+        print("Response:", response.json())
+
+
 def unban_user(bot_token, guild_id, user_id):
     url = f"https://discord.com/api/v10/guilds/{guild_id}/bans/{user_id}"
     headers = {
@@ -472,7 +487,9 @@ async def on_message(message):
 
         except Exception as e:
             print(e)
-        if message.channel.category_id == MOD_MAIL_CATEGORY:
+        if (message.channel.type == discord.ChannelType.private) or (
+            message.channel.category_id == MOD_MAIL_CATEGORY
+        ):
             await log_event(
                 f"Message sent in {message.channel}",
                 message.author,
@@ -1255,7 +1272,7 @@ async def voiceDrag(
 
 @bot.slash_command(
     name="request-vc-drag",
-    description="Ask a mod for a drag request.",
+    description="Ask a user for a drag request.",
     guild_ids=[GUILD_ID],
 )
 @commands.has_guild_permissions(administrator=True)
@@ -1281,13 +1298,13 @@ async def dragMe(
             )
             embed1 = discord.Embed(
                 title=f"{interactor.user.name} has been dragged!",
-                description=f"{user_name} has has accepted the request.",
+                description=f"{user_name} has accepted the request.",
                 color=0x00FFFF,
             )
             view1 = View()
             embed2 = discord.Embed(
                 title=f"{interactor.user.name} has been rejected to be dragged!",
-                description=f"{user_name} has has rejected the request.",
+                description=f"{user_name} has rejected the request.",
                 color=0x00FFFF,
             )
             accept_button = Button(label="Accept", style=discord.ButtonStyle.green)
@@ -1360,7 +1377,6 @@ async def help(interaction: discord.Interaction):
     drag_desc = "To drag a user between VCs in the server."
     dragReq_desc = "To send a drag request for VCs in the server."
     findVc_desc = "To find which VC a user is in."
-    modMail_desc = "To open a modmail ticket for support from moderators."
     currency_desc = "To show how much currency you have."
     level_desc = "To show how many levels you have gained."
     createVoice_desc = "To create a private voice channel using 10 currency."
@@ -1386,7 +1402,6 @@ async def help(interaction: discord.Interaction):
 
 
 signal.signal(signal.SIGINT, signal_handler)
-
 
 t1 = threading.Thread(target=background_unban_task, args=(bot,))
 t1.start()
